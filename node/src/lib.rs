@@ -5,6 +5,7 @@ use consensus::{
     bullshark::Bullshark,
     dag::Dag,
     metrics::{ChannelMetrics, ConsensusMetrics},
+    tusk::Tusk,
     Consensus, ConsensusOutput,
 };
 
@@ -322,7 +323,13 @@ impl Node {
             .inc_by(len_restored);
 
         // Spawn the consensus core who only sequences transactions.
-        let ordering_engine = Bullshark::new(
+        // let ordering_engine = Bullshark::new(
+        //     (**committee.load()).clone(),
+        //     store.consensus_store.clone(),
+        //     parameters.gc_depth,
+        // );
+
+        let ordering_engine = Tusk::new(
             (**committee.load()).clone(),
             store.consensus_store.clone(),
             parameters.gc_depth,

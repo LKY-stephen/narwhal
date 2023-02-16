@@ -138,7 +138,7 @@ impl BatchMaker {
             let tx_ids: Vec<_> = batch
                 .0
                 .iter()
-                .filter(|tx| tx[0] == 0u8 && tx.len() > 8)
+                .filter(|tx| tx[0] == 0u8 && tx.len() > 9)
                 .filter_map(|tx| tx[1..9].try_into().ok())
                 .collect();
 
@@ -147,7 +147,7 @@ impl BatchMaker {
                 tracing::info!(
                     "Batch {:?} contains sample tx {}",
                     digest,
-                    u64::from_be_bytes(id)
+                    u64::from_be_bytes(id),
                 );
             }
 

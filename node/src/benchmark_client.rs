@@ -141,6 +141,7 @@ impl Client {
         let mut counter = 0;
         let mut r = rand::thread_rng().gen();
         let interval = interval(Duration::from_millis(BURST_DURATION));
+        let client_id: u64 = rand::thread_rng().gen();
         tokio::pin!(interval);
 
         // NOTE: This log entry is used to compute performance.
@@ -155,10 +156,10 @@ impl Client {
             let stream = tokio_stream::iter(0..burst).map(move |x| {
                 if x == counter % burst {
                     // NOTE: This log entry is used to compute performance.
-                    info!("Sending sample transaction {counter}");
+                    info!("Sending sample transaction {}", client_id + counter);
 
                     tx.put_u8(0u8); // Sample txs start with 0.
-                    tx.put_u64(counter); // This counter identifies the tx.
+                    tx.put_u64(client_id + counter); // This counter identifies the tx.
                 } else {
                     r += 1;
                     tx.put_u8(1u8); // Standard txs start with 1.

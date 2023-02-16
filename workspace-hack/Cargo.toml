@@ -301,7 +301,7 @@ time = { version = "0.3", features = ["alloc", "formatting", "itoa", "macros", "
 tinytemplate = { version = "1", default-features = false }
 tinyvec = { version = "1", features = ["alloc", "tinyvec_macros"] }
 tinyvec_macros = { version = "0.1", default-features = false }
-tokio = { version = "1", features = ["bytes", "fs", "full", "io-std", "io-util", "libc", "macros", "memchr", "mio", "net", "num_cpus", "once_cell", "parking_lot", "process", "rt", "rt-multi-thread", "signal", "signal-hook-registry", "socket2", "sync", "time", "tokio-macros"] }
+tokio = { version = "1.25.0", features = ["bytes", "fs", "full", "io-std", "io-util", "libc", "macros", "memchr", "mio", "net", "num_cpus", "parking_lot", "process", "rt", "rt-multi-thread", "signal", "signal-hook-registry", "socket2", "sync", "time", "tokio-macros"] }
 tokio-io-timeout = { version = "1", default-features = false }
 tokio-rustls = { version = "0.23", features = ["logging", "tls12"] }
 tokio-stream = { version = "0.1", features = ["net", "time"] }

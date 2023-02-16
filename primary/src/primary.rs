@@ -589,7 +589,7 @@ impl WorkerToPrimary for WorkerReceiverHandler {
         let message = request.into_body();
 
         match message {
-            WorkerPrimaryMessage::OurBatch(digest, worker_id) => {
+            WorkerPrimaryMessage::OurBatch(digest, meta, worker_id) => {
                 self.metrics
                     .batches_received
                     .with_label_values(&[&worker_id.to_string(), "our_batch"])
@@ -599,7 +599,7 @@ impl WorkerToPrimary for WorkerReceiverHandler {
                     .await
                     .map_err(|_| DagError::ShuttingDown)
             }
-            WorkerPrimaryMessage::OthersBatch(digest, worker_id) => {
+            WorkerPrimaryMessage::OthersBatch(digest, meta, worker_id) => {
                 self.metrics
                     .batches_received
                     .with_label_values(&[&worker_id.to_string(), "others_batch"])

@@ -2,11 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 use config::{Parameters, SharedCommittee, SharedWorkerCache, WorkerId};
 use consensus::{
-    bullshark::Bullshark,
+    // bullshark::Bullshark,
     dag::Dag,
     metrics::{ChannelMetrics, ConsensusMetrics},
     tusk::Tusk,
-    Consensus, ConsensusOutput,
+    Consensus,
+    ConsensusOutput,
 };
 
 use crypto::{KeyPair, NetworkKeyPair, PublicKey};

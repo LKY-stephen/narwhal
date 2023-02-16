@@ -247,7 +247,7 @@ impl PrimaryToWorker for PrimaryReceiverHandler {
         let message = request.into_body();
 
         let mut missing = HashSet::new();
-        let mut available = HashSet::new();
+        let mut available = vec![];
 
         for digest in message.digests.iter() {
             // Check if we already have the batch.
@@ -256,8 +256,8 @@ impl PrimaryToWorker for PrimaryReceiverHandler {
                     missing.insert(*digest);
                     debug!("Requesting sync for batch {digest}");
                 }
-                Ok(Some(_)) => {
-                    available.insert(*digest);
+                Ok(Some(batch)) => {
+                    available.push((*digest, batch.get_meta_data()));
                     trace!("Digest {digest} already in store, nothing to sync");
                     continue;
                 }
@@ -272,8 +272,8 @@ impl PrimaryToWorker for PrimaryReceiverHandler {
         // Doing this will ensure the batch id will be populated to primary even
         // when other processes fail to do so (ex we received a batch from a peer
         // worker and message has been missed by primary).
-        for digest in available {
-            let message = WorkerPrimaryMessage::OthersBatch(digest, self.id);
+        for (digest, meta) in available {
+            let message = WorkerPrimaryMessage::OthersBatch(digest, meta, self.id);
             let _ = self.tx_primary.send(message).await.tap_err(|err| {
                 debug!("{err:?} {}", DagError::ShuttingDown);
             });

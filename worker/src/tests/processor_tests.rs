@@ -33,6 +33,7 @@ async fn hash_and_store_our_batch() {
 
     // Send a batch to the `Processor`.
     let batch = batch();
+    let meta = batch.get_meta_data();
 
     // the process should be idempotent - no matter how many times we write
     // the same batch it should be stored and output the message to the tx_digest channel
@@ -44,9 +45,10 @@ async fn hash_and_store_our_batch() {
         // Ensure the `Processor` outputs the batch's digest.
         let digest = batch.digest();
         match rx_digest.recv().await.unwrap() {
-            WorkerPrimaryMessage::OurBatch(x, y) => {
+            WorkerPrimaryMessage::OurBatch(x, m, y) => {
                 assert_eq!(x, digest);
                 assert_eq!(y, id);
+                assert_eq!(m, meta);
             }
             _ => panic!("Unexpected protocol message"),
         }
@@ -93,10 +95,12 @@ async fn hash_and_store_others_batch() {
         // THEN
         // Ensure the `Processor` outputs the batch's digest.
         let digest = batch.digest();
+        let meta = batch.get_meta_data();
         match rx_digest.recv().await.unwrap() {
-            WorkerPrimaryMessage::OthersBatch(x, y) => {
+            WorkerPrimaryMessage::OthersBatch(x, m, y) => {
                 assert_eq!(x, digest);
                 assert_eq!(y, id);
+                assert_eq!(m, meta);
             }
             _ => panic!("Unexpected protocol message"),
         }

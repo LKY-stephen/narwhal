@@ -113,7 +113,7 @@ async fn synchronize_when_batch_exists() {
         target,
     };
     let responder_handle = tokio::spawn(async move {
-        if let WorkerPrimaryMessage::OthersBatch(recv_digest, recv_id) =
+        if let WorkerPrimaryMessage::OthersBatch(recv_digest, meta, recv_id) =
             rx_primary.recv().await.unwrap()
         {
             assert_eq!(recv_digest, batch_id);

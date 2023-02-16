@@ -42,13 +42,16 @@ impl Processor {
                         // Hash the batch.
                         let digest = batch.digest();
 
+                        // Fetch batch meta data for primary
+                        let meta = batch.get_meta_data();
+
                         // Store the batch.
                         store.write(digest, batch).await;
 
                         // Deliver the batch's digest.
                         let message = match own_digest {
-                            true => WorkerPrimaryMessage::OurBatch(digest, id),
-                            false => WorkerPrimaryMessage::OthersBatch(digest, id),
+                            true => WorkerPrimaryMessage::OurBatch(digest, meta, id),
+                            false => WorkerPrimaryMessage::OthersBatch(digest,meta, id),
                         };
                         if tx_digest
                             .send(message)

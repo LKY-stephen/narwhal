@@ -22,8 +22,8 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 use std::{
-    collections::{BTreeMap, BTreeSet, VecDeque},
-    fmt,
+    collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
+    fmt::{self},
 };
 
 /// The round number.
@@ -33,6 +33,31 @@ pub type Transaction = Vec<u8>;
 #[derive(Clone, Serialize, Deserialize, Default, Debug, PartialEq, Eq, Arbitrary)]
 pub struct Batch(pub Vec<Transaction>);
 
+#[derive(Clone, Serialize, Debug, Deserialize, Default, Eq, PartialEq, MallocSizeOf)]
+pub struct BatchMeta(pub HashMap<u64, u64>);
+
+impl Batch {
+    pub fn get_meta_data(&self) -> BatchMeta {
+        let mut meta = HashMap::new();
+        for tx in self.0.clone() {
+            let input_len = tx[9];
+            let tx_id = u64::from_be_bytes(tx[1..9].try_into().unwrap());
+            // make sure the inputs is bigger than zero
+            assert!(input_len > 0);
+            let mut start = 10;
+            for _ in 0..input_len {
+                let txo = u64::from_be_bytes(tx[start..start + 8].try_into().unwrap());
+
+                // batch should not have conflicted txs.
+                if let Some(oldtx) = meta.insert(txo, tx_id) {
+                    panic!("Batch contains conflicted tx {tx_id} {oldtx}")
+                }
+                start += 8;
+            }
+        }
+        return BatchMeta(meta);
+    }
+}
 #[derive(
     Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq, Hash, PartialOrd, Ord, MallocSizeOf,
 )]
@@ -791,9 +816,9 @@ impl fmt::Display for BlockErrorKind {
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub enum WorkerPrimaryMessage {
     /// The worker indicates it sealed a new batch.
-    OurBatch(BatchDigest, WorkerId),
+    OurBatch(BatchDigest, BatchMeta, WorkerId),
     /// The worker indicates it received a batch's digest from another authority.
-    OthersBatch(BatchDigest, WorkerId),
+    OthersBatch(BatchDigest, BatchMeta, WorkerId),
     /// The worker sends a requested batch
     RequestedBatch(BatchDigest, Batch),
     /// When batches are successfully deleted, this message is sent dictating the

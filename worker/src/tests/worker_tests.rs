@@ -49,10 +49,11 @@ async fn handle_clients_transactions() {
 
     // Spawn a network listener to receive our batch's digest.
     let batch = batch();
+    let meta = batch.get_meta_data();
     let batch_digest = batch.digest();
 
     let primary_address = committee.primary(&name).unwrap();
-    let expected = WorkerPrimaryMessage::OurBatch(batch_digest, worker_id);
+    let expected = WorkerPrimaryMessage::OurBatch(batch_digest, meta, worker_id);
     let (mut handle, _network) =
         WorkerToPrimaryMockServer::spawn(my_primary.network_keypair().copy(), primary_address);
 

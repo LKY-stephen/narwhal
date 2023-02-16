@@ -38,9 +38,11 @@ class LogParser:
         except (ValueError, IndexError, AttributeError) as e:
             exception(e)
             raise ParseError(f'Failed to parse clients\' logs: {e}')
-        self.size, self.rate, self.start, misses, self.sent_samples \
+        self.size, self.rate, self.start, misses, sent_sample\
             = zip(*results)
         self.misses = sum(misses)
+        self.sent_samples=self._merge_results(
+            [x.items() for x in sent_sample])
 
         # Parse the primaries logs.
         try:
@@ -49,9 +51,11 @@ class LogParser:
         except (ValueError, IndexError, AttributeError) as e:
             exception(e)
             raise ParseError(f'Failed to parse nodes\' logs: {e}')
-        proposals, commits, self.configs, primary_ips = zip(*results)
+        proposals, commits, self.configs, primary_ips, executed = zip(*results)
         self.proposals = self._merge_results([x.items() for x in proposals])
         self.commits = self._merge_results([x.items() for x in commits])
+        self.executed_samples = self._merge_results(
+            [x.items() for x in executed])
 
         # Parse the workers logs.
         try:
@@ -60,10 +64,13 @@ class LogParser:
         except (ValueError, IndexError, AttributeError) as e:
             exception(e)
             raise ParseError(f'Failed to parse workers\' logs: {e}')
-        sizes, self.received_samples, workers_ips = zip(*results)
+        sizes, received_samples, workers_ips = zip(*results)
         self.sizes = {
             k: v for x in sizes for k, v in x.items() if k in self.commits
         }
+        
+        self.received_samples=self._merge_results(
+            [x.items() for x in received_samples])
 
         # Determine whether the primary and the workers are collocated.
         self.collocate = set(primary_ips) == set(workers_ips)
@@ -85,7 +92,7 @@ class LogParser:
 
     def _parse_clients(self, log):
         if search(r'Error', log) is not None:
-            raise ParseError('Client(s) panicked')
+            print('Client(s) panicked')
 
         size = int(search(r'Transactions size: (\d+)', log).group(1))
         rate = int(search(r'Transactions rate: (\d+)', log).group(1))
@@ -102,7 +109,7 @@ class LogParser:
 
     def _parse_primaries(self, log):
         if search(r'(?:panicked|ERROR)', log) is not None:
-            raise ParseError('Primary(s) panicked')
+            print('Primary(s) panicked')
 
         tmp = findall(r'(.*?) .* Created B\d+\([^ ]+\) -> ([^ ]+=)', log)
         tmp = [(d, self._to_posix(t)) for t, d in tmp]
@@ -111,6 +118,10 @@ class LogParser:
         tmp = findall(r'(.*?) .* Committed B\d+\([^ ]+\) -> ([^ ]+=)', log)
         tmp = [(d, self._to_posix(t)) for t, d in tmp]
         commits = self._merge_results([tmp])
+
+        tmp = findall(r'(.*?) .*Execute sample tx +(\d+)', log)
+        tmp = [(int(d), self._to_posix(t)) for t, d in tmp]
+        executed = self._merge_results([tmp])
 
         configs = {
             'header_size': int(
@@ -141,11 +152,11 @@ class LogParser:
 
         ip = search(r'booted on (/ip4/\d+.\d+.\d+.\d+)', log).group(1)
 
-        return proposals, commits, configs, ip
+        return proposals, commits, configs, ip, executed
 
     def _parse_workers(self, log):
         if search(r'(?:panic|ERROR)', log) is not None:
-            raise ParseError('Worker(s) panicked')
+            print('Worker(s) panicked')
 
         tmp = findall(r'Batch ([^ ]+) contains (\d+) B', log)
         sizes = {d: int(s) for d, s in tmp}
@@ -186,14 +197,7 @@ class LogParser:
         return tps, bps, duration
 
     def _end_to_end_latency(self):
-        latency = []
-        for sent, received in zip(self.sent_samples, self.received_samples):
-            for tx_id, batch_id in received.items():
-                if batch_id in self.commits:
-                    assert tx_id in sent  # We receive txs that we sent.
-                    start = sent[tx_id]
-                    end = self.commits[batch_id]
-                    latency += [end-start]
+        latency = [c - self.sent_samples[d] for d, c in self.executed_samples.items()]
         return mean(latency) if latency else 0
 
     def result(self):

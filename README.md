@@ -1,3 +1,8 @@
+# Narwhal+ code base
+
+An implementation of Narwhal variant with lower latency. Not for production.
+
+
 # Narwhal development now happens at https://github.com/MystenLabs/sui/tree/main/narwhal
 
 For Narwhal (and Bullshark / Tusk) users: Narwhal (together with Bullshark and Tusk) still exists as an independent project. We will be periodically publishing Narwhal packages to `crates.io`.

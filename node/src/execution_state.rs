@@ -27,6 +27,13 @@ impl ExecutionState for SimpleExecutionState {
         _execution_indices: ExecutionIndices,
         transaction: Vec<u8>,
     ) {
+        // now tx reach the states.
+        if transaction[0] == 0u8 && transaction.len() > 9 {
+            tracing::info!(
+                "Execute sample tx {} ",
+                u64::from_be_bytes(transaction[1..9].try_into().unwrap())
+            )
+        }
         if let Err(err) = self.tx_transaction_confirmation.send(transaction).await {
             eprintln!("Failed to send txn in SimpleExecutionState: {}", err);
         }

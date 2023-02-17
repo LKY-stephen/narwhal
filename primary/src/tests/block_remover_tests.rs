@@ -40,6 +40,7 @@ async fn test_successful_blocks_delete() {
     let (tx_commands, rx_commands) = test_utils::test_channel!(10);
     let (tx_remove_block, mut rx_remove_block) = mpsc::channel(1);
     let (tx_delete_batches, rx_delete_batches) = test_utils::test_channel!(10);
+    let (tx_remove_meta, mut rx_remove_meta) = test_utils::test_channel!(10);
 
     // AND the necessary keys
     let fixture = CommitteeFixture::builder().randomize_ports(true).build();
@@ -69,6 +70,7 @@ async fn test_successful_blocks_delete() {
         rx_commands,
         rx_delete_batches,
         tx_removed_certificates,
+        tx_remove_meta,
     );
 
     let mut block_ids = Vec::new();
@@ -97,7 +99,7 @@ async fn test_successful_blocks_delete() {
 
         // write the certificate
         certificate_store.write(certificate.clone()).unwrap();
-        dag.insert(certificate).await.unwrap();
+        dag.insert(certificate.clone()).await.unwrap();
 
         // write the header
         header_store.write(header.clone().id, header.clone()).await;
@@ -147,7 +149,12 @@ async fn test_successful_blocks_delete() {
             .await
             .unwrap();
     }
-
+    let batches = worker_batches
+        .clone()
+        .values()
+        .flatten()
+        .map(|v| v.to_owned())
+        .collect::<Vec<_>>();
     tx_commands
         .send(BlockRemoverCommand::RemoveBlocks {
             ids: block_ids.clone(),
@@ -207,7 +214,16 @@ async fn test_successful_blocks_delete() {
         total_deleted += 1;
     }
 
+    let mut batch_deleted = 0;
+    while let Ok(Some(c)) = timeout(Duration::from_secs(1), rx_remove_meta.recv()).await {
+        for b in c.clone() {
+            assert!(batches.contains(&b), "Deleted batches not found");
+        }
+        batch_deleted += c.len();
+    }
+
     assert_eq!(total_deleted, block_ids.len());
+    assert_eq!(batch_deleted, batches.len());
 }
 
 #[tokio::test]
@@ -219,6 +235,7 @@ async fn test_timeout() {
     let (_tx_consensus, rx_consensus) = test_utils::test_channel!(1);
     let (_tx_delete_batches, rx_delete_batches) = test_utils::test_channel!(10);
     let (tx_removed_certificates, _rx_removed_certificates) = test_utils::test_channel!(10);
+    let (tx_remove_meta, mut rx_remove_meta) = test_utils::test_channel!(10);
 
     // AND the necessary keys
     let fixture = CommitteeFixture::builder().build();
@@ -248,6 +265,7 @@ async fn test_timeout() {
         rx_commands,
         rx_delete_batches,
         tx_removed_certificates,
+        tx_remove_meta,
     );
 
     let mut block_ids = Vec::new();
@@ -346,6 +364,10 @@ async fn test_timeout() {
                 }
             }
         },
+
+        Some(_) = rx_remove_meta.recv() =>{
+            panic!("Timeout, no result has been received in time")
+        }
         () = &mut timer => {
             panic!("Timeout, no result has been received in time")
         }
@@ -360,6 +382,7 @@ async fn test_unlocking_pending_requests() {
     let (_tx_consensus, rx_consensus) = test_utils::test_channel!(1);
     let (_tx_delete_batches, rx_delete_batches) = test_utils::test_channel!(10);
     let (tx_removed_certificates, _rx_removed_certificates) = test_utils::test_channel!(10);
+    let (tx_remove_meta, _) = test_utils::test_channel!(10);
 
     // AND the necessary keys
     let fixture = CommitteeFixture::builder().build();
@@ -392,6 +415,7 @@ async fn test_unlocking_pending_requests() {
         map_tx_worker_removal_results: HashMap::new(),
         rx_delete_batches,
         tx_removed_certificates,
+        tx_remove_meta,
     };
 
     let mut block_ids = Vec::new();

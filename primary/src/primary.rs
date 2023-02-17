@@ -2,6 +2,7 @@
 // Copyright (c) 2022, Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 use crate::{
+    batch_meta_manager::BatchMetaManager,
     block_remover::DeleteBatchResult,
     block_synchronizer::{
         handler::BlockSynchronizerHandler,
@@ -47,7 +48,7 @@ use tracing::info;
 use types::{
     error::DagError,
     metered_channel::{channel, Receiver, Sender},
-    BatchDigest, BatchMessage, Certificate, Header, HeaderDigest, PrimaryToPrimary,
+    BatchDigest, BatchMessage, BatchMeta, Certificate, Header, HeaderDigest, PrimaryToPrimary,
     PrimaryToPrimaryServer, ReconfigureNotification, RoundVoteDigestPair, WorkerInfoResponse,
     WorkerPrimaryError, WorkerPrimaryMessage, WorkerToPrimary, WorkerToPrimaryServer,
 };
@@ -83,6 +84,7 @@ impl Primary {
         certificate_store: CertificateStore,
         payload_store: Store<(BatchDigest, WorkerId), PayloadToken>,
         vote_digest_store: Store<PublicKey, RoundVoteDigestPair>,
+        meta_store: Store<BatchDigest, BatchMeta>,
         tx_consensus: Sender<Certificate>,
         rx_consensus: Receiver<Certificate>,
         tx_get_block_commands: Sender<BlockCommand>,
@@ -155,6 +157,11 @@ impl Primary {
         let (tx_state_handler, rx_state_handler) =
             channel(CHANNEL_CAPACITY, &primary_channel_metrics.tx_state_handler);
 
+        let (tx_new_meta, rx_new_meta) =
+            channel(CHANNEL_CAPACITY, &primary_channel_metrics.tx_new_meta);
+        let (tx_remove_meta, rx_remove_meta) =
+            channel(CHANNEL_CAPACITY, &primary_channel_metrics.tx_remove_meta);
+
         // we need to hack the gauge from this consensus channel into the primary registry
         // This avoids a cyclic dependency in the initialization of consensus and primary
         // TODO: this (tx_committed_certificates, rx_consensus) channel pair name is highly counterintuitive: see initialization in node and rename(?)
@@ -203,6 +210,7 @@ impl Primary {
             tx_batches,
             tx_batch_removal,
             tx_state_handler,
+            tx_new_meta,
             our_workers,
             metrics: node_metrics.clone(),
         });
@@ -304,6 +312,9 @@ impl Primary {
             core_primary_network,
         );
 
+        // Manage batch meta data
+        let batch_meta_manager = BatchMetaManager::spawn(meta_store, rx_new_meta, rx_remove_meta);
+
         // Receives batch digests from other workers. They are only used to validate headers.
         let payload_receiver_handle = PayloadReceiver::spawn(
             payload_store.clone(),
@@ -351,6 +362,7 @@ impl Primary {
             rx_block_removal_commands,
             rx_batch_removal,
             tx_committed_certificates,
+            tx_remove_meta,
         );
 
         // Responsible for finding missing blocks (certificates) and fetching
@@ -483,6 +495,7 @@ impl Primary {
             proposer_handle,
             helper_handle,
             state_handler_handle,
+            batch_meta_manager,
         ];
 
         if let Some(h) = consensus_api_handle {
@@ -576,6 +589,7 @@ struct WorkerReceiverHandler {
     tx_batches: Sender<BatchResult>,
     tx_batch_removal: Sender<DeleteBatchResult>,
     tx_state_handler: Sender<ReconfigureNotification>,
+    tx_new_meta: Sender<(BatchDigest, BatchMeta)>,
     our_workers: BTreeMap<WorkerId, WorkerInfo>,
     metrics: Arc<PrimaryMetrics>,
 }
@@ -586,6 +600,7 @@ impl WorkerToPrimary for WorkerReceiverHandler {
         &self,
         request: anemo::Request<types::WorkerPrimaryMessage>,
     ) -> Result<anemo::Response<()>, anemo::rpc::Status> {
+        let _ = &request;
         let message = request.into_body();
 
         match message {
@@ -594,6 +609,7 @@ impl WorkerToPrimary for WorkerReceiverHandler {
                     .batches_received
                     .with_label_values(&[&worker_id.to_string(), "our_batch"])
                     .inc();
+                self.tx_new_meta.send((digest.clone(), meta)).await.unwrap();
                 self.tx_our_digests
                     .send((digest, worker_id))
                     .await
@@ -604,6 +620,7 @@ impl WorkerToPrimary for WorkerReceiverHandler {
                     .batches_received
                     .with_label_values(&[&worker_id.to_string(), "others_batch"])
                     .inc();
+                self.tx_new_meta.send((digest.clone(), meta)).await.unwrap();
                 self.tx_others_digests
                     .send((digest, worker_id))
                     .await

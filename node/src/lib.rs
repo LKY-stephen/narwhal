@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 use config::{Parameters, SharedCommittee, SharedWorkerCache, WorkerId};
 use consensus::{
+    consensus::NodeVotes,
     // bullshark::Bullshark,
     dag::Dag,
     metrics::{ChannelMetrics, ConsensusMetrics},
@@ -28,8 +29,8 @@ use tokio::sync::oneshot;
 use tokio::{sync::watch, task::JoinHandle};
 use tracing::{debug, info};
 use types::{
-    metered_channel, Batch, BatchDigest, Certificate, CertificateDigest, ConsensusStore, Header,
-    HeaderDigest, ReconfigureNotification, Round, RoundVoteDigestPair, SequenceNumber,
+    metered_channel, Batch, BatchDigest, BatchMeta, Certificate, CertificateDigest, ConsensusStore,
+    Header, HeaderDigest, ReconfigureNotification, Round, RoundVoteDigestPair, SequenceNumber,
 };
 use worker::{metrics::initialise_metrics, Worker};
 
@@ -46,6 +47,11 @@ pub struct NodeStorage {
     pub batch_store: Store<BatchDigest, Batch>,
     pub consensus_store: Arc<ConsensusStore>,
     pub temp_batch_store: Store<(CertificateDigest, BatchDigest), Batch>,
+
+    pub batch_meta_store: Store<BatchDigest, BatchMeta>,
+    pub batch_votes_store: Store<BatchDigest, NodeVotes>,
+    pub tx_votes_store: Store<u64, NodeVotes>,
+    pub txo_tx_store: Store<u64, u64>,
 }
 
 impl NodeStorage {
@@ -59,6 +65,10 @@ impl NodeStorage {
     const LAST_COMMITTED_CF: &'static str = "last_committed";
     const SEQUENCE_CF: &'static str = "sequence";
     const TEMP_BATCH_CF: &'static str = "temp_batches";
+    const BATCH_VOTES_CF: &'static str = "batches_votes";
+    const BATCH_META_CF: &'static str = "batches_meta";
+    const TX_VOTES_CF: &'static str = "txs_votes";
+    const TXO_TX_CF: &'static str = "txo_tx";
 
     /// Open or reopen all the storage of the node.
     pub fn reopen<Path: AsRef<std::path::Path>>(store_path: Path) -> Self {
@@ -75,6 +85,10 @@ impl NodeStorage {
                 Self::LAST_COMMITTED_CF,
                 Self::SEQUENCE_CF,
                 Self::TEMP_BATCH_CF,
+                Self::BATCH_VOTES_CF,
+                Self::BATCH_META_CF,
+                Self::TX_VOTES_CF,
+                Self::TXO_TX_CF,
             ],
         )
         .expect("Cannot open database");
@@ -89,6 +103,10 @@ impl NodeStorage {
             last_committed_map,
             sequence_map,
             temp_batch_map,
+            batch_meta_store,
+            batch_votes_store,
+            tx_votes_store,
+            txo_tx_store,
         ) = reopen!(&rocksdb,
             Self::VOTES_CF;<PublicKey, RoundVoteDigestPair>,
             Self::HEADERS_CF;<HeaderDigest, Header>,
@@ -98,7 +116,11 @@ impl NodeStorage {
             Self::BATCHES_CF;<BatchDigest, Batch>,
             Self::LAST_COMMITTED_CF;<PublicKey, Round>,
             Self::SEQUENCE_CF;<SequenceNumber, CertificateDigest>,
-            Self::TEMP_BATCH_CF;<(CertificateDigest, BatchDigest), Batch>
+            Self::TEMP_BATCH_CF;<(CertificateDigest, BatchDigest), Batch>,
+            Self::BATCH_META_CF;<BatchDigest, BatchMeta>,
+            Self::BATCH_VOTES_CF;<BatchDigest, NodeVotes>,
+            Self::TX_VOTES_CF;<u64, NodeVotes>,
+            Self::TXO_TX_CF;<u64, u64>
         );
 
         let vote_digest_store = Store::new(votes_map);
@@ -108,6 +130,10 @@ impl NodeStorage {
         let batch_store = Store::new(batch_map);
         let consensus_store = Arc::new(ConsensusStore::new(last_committed_map, sequence_map));
         let temp_batch_store = Store::new(temp_batch_map);
+        let batch_meta_store = Store::new(batch_meta_store);
+        let batch_votes_store = Store::new(batch_votes_store);
+        let tx_votes_store = Store::new(tx_votes_store);
+        let txo_tx_store = Store::new(txo_tx_store);
 
         Self {
             vote_digest_store,
@@ -117,6 +143,10 @@ impl NodeStorage {
             batch_store,
             consensus_store,
             temp_batch_store,
+            batch_meta_store,
+            batch_votes_store,
+            tx_votes_store,
+            txo_tx_store,
         }
     }
 }
@@ -243,6 +273,7 @@ impl Node {
             store.certificate_store.clone(),
             store.payload_store.clone(),
             store.vote_digest_store.clone(),
+            store.batch_meta_store.clone(),
             tx_new_certificates,
             /* rx_consensus */ rx_consensus,
             tx_get_block_commands,

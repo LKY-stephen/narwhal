@@ -89,6 +89,10 @@ pub struct PrimaryChannelMetrics {
     pub tx_committed_certificates: IntGauge,
     /// occupancy of the channel from the `primary::Core` to the `Consensus`
     pub tx_new_certificates: IntGauge,
+    /// occupancy of the channel from the `primary::WorkerReceiverHandler` to the `BatchMetaManager`
+    pub tx_new_meta: IntGauge,
+    /// occupancy of the channel from the `primary::Core` to the `Consensus`
+    pub tx_remove_meta: IntGauge,
 }
 
 impl PrimaryChannelMetrics {
@@ -208,6 +212,16 @@ impl PrimaryChannelMetrics {
             tx_new_certificates: register_int_gauge_with_registry!(
                 Self::NAME_NEW_CERTS,
                 Self::DESC_NEW_CERTS,
+                registry
+            ).unwrap(),
+            tx_new_meta: register_int_gauge_with_registry!(
+                "tx_new_meta",
+                "receive meta from worker and store them",
+                registry
+            ).unwrap(),
+            tx_remove_meta: register_int_gauge_with_registry!(
+                "tx_remove_meta",
+                "remove meta from primary",
                 registry
             ).unwrap(),
         }

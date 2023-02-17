@@ -9,6 +9,7 @@
 )]
 
 mod aggregators;
+mod batch_meta_manager;
 mod block_remover;
 pub mod block_synchronizer;
 mod block_waiter;

@@ -352,7 +352,7 @@ impl SubscriberNetwork for SubscriberNetworkImpl {
         certificate: &Certificate,
         worker_id: &WorkerId,
     ) -> Vec<NetworkPublicKey> {
-        let authorities = certificate.signed_authorities(&self.committee);
+        let authorities = certificate.signed_authorities(&(self.committee));
         authorities
             .into_iter()
             .filter_map(|authority| {

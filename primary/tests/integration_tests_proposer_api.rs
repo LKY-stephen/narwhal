@@ -108,6 +108,7 @@ async fn test_rounds_errors() {
         store_primary.certificate_store,
         store_primary.payload_store,
         store_primary.vote_digest_store,
+        store_primary.batch_meta_store,
         /* tx_consensus */ tx_new_certificates,
         /* rx_consensus */ rx_feedback,
         /* external_consensus */
@@ -195,6 +196,7 @@ async fn test_rounds_return_successful_response() {
         store_primary.certificate_store,
         store_primary.payload_store,
         store_primary.vote_digest_store,
+        store_primary.batch_meta_store,
         /* tx_consensus */ tx_new_certificates,
         /* rx_consensus */ rx_feedback,
         tx_get_block_commands,
@@ -350,6 +352,7 @@ async fn test_node_read_causal_signed_certificates() {
         primary_store_1.certificate_store.clone(),
         primary_store_1.payload_store.clone(),
         primary_store_1.vote_digest_store.clone(),
+        primary_store_1.batch_meta_store.clone(),
         /* tx_consensus */ tx_new_certificates,
         /* rx_consensus */ rx_feedback,
         tx_get_block_commands_1,
@@ -392,6 +395,7 @@ async fn test_node_read_causal_signed_certificates() {
         primary_store_2.certificate_store,
         primary_store_2.payload_store,
         primary_store_2.vote_digest_store,
+        primary_store_2.batch_meta_store,
         /* tx_consensus */ tx_new_certificates_2,
         /* rx_consensus */ rx_feedback_2,
         /* external_consensus */

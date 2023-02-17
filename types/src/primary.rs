@@ -43,7 +43,6 @@ impl Batch {
             let input_len = tx[9];
             let tx_id = u64::from_be_bytes(tx[1..9].try_into().unwrap());
             // make sure the inputs is bigger than zero
-            assert!(input_len > 0);
             let mut start = 10;
             for _ in 0..input_len {
                 let txo = u64::from_be_bytes(tx[start..start + 8].try_into().unwrap());
@@ -52,7 +51,7 @@ impl Batch {
                 if let Some(oldtx) = meta.insert(txo, tx_id) {
                     panic!("Batch contains conflicted tx {tx_id} {oldtx}")
                 }
-                start += 8;
+                start = start + 8;
             }
         }
         return BatchMeta(meta);

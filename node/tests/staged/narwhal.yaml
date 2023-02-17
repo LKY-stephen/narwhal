@@ -21,6 +21,11 @@ BatchDigest:
     TUPLEARRAY:
       CONTENT: U8
       SIZE: 32
+BatchMeta:
+  NEWTYPESTRUCT:
+    MAP:
+      KEY: U64
+      VALUE: U64
 Certificate:
   STRUCT:
     - header:
@@ -124,11 +129,13 @@ WorkerPrimaryMessage:
       OurBatch:
         TUPLE:
           - TYPENAME: BatchDigest
+          - TYPENAME: BatchMeta
           - U32
     1:
       OthersBatch:
         TUPLE:
           - TYPENAME: BatchDigest
+          - TYPENAME: BatchMeta
           - U32
     2:
       RequestedBatch:

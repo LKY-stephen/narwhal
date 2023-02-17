@@ -231,6 +231,9 @@ pub struct BlockRemover {
 
     /// Outputs all the successfully deleted certificates
     tx_removed_certificates: Sender<Certificate>,
+
+    /// send request to delete batch meta
+    tx_remove_meta: Sender<Vec<BatchDigest>>,
 }
 
 impl BlockRemover {
@@ -248,6 +251,7 @@ impl BlockRemover {
         rx_commands: Receiver<BlockRemoverCommand>,
         rx_delete_batches: Receiver<DeleteBatchResult>,
         removed_certificates: Sender<Certificate>,
+        tx_remove_meta: Sender<Vec<BatchDigest>>,
     ) -> JoinHandle<()> {
         tokio::spawn(async move {
             Self {
@@ -266,6 +270,7 @@ impl BlockRemover {
                 map_tx_worker_removal_results: HashMap::new(),
                 rx_delete_batches,
                 tx_removed_certificates: removed_certificates,
+                tx_remove_meta: tx_remove_meta,
             }
             .run()
             .await;
@@ -403,9 +408,10 @@ impl BlockRemover {
             .await
             .map_err(Either::Left)?;
 
-        // delete batch from the payload store as well
+        // delete batch from the payload store and meta store as well
         let mut batches_to_cleanup: Vec<(BatchDigest, WorkerId)> = Vec::new();
         for (worker_id, batch_ids) in batches_by_worker {
+            self.tx_remove_meta.send(batch_ids.clone()).await.unwrap();
             batch_ids.into_iter().for_each(|d| {
                 batches_to_cleanup.push((d, worker_id));
             })
@@ -497,9 +503,7 @@ impl BlockRemover {
                         let found_certificates: Vec<Certificate> =
                             certificates.into_iter().flatten().collect();
 
-                        let receivers = self
-                            .send_delete_requests_to_workers(found_certificates.clone())
-                            .await;
+                        let receivers = self.send_delete_requests(found_certificates.clone()).await;
 
                         // now spin up a waiter
                         let fut = Self::wait_for_responses(ids, receivers);
@@ -534,7 +538,7 @@ impl BlockRemover {
         None
     }
 
-    async fn send_delete_requests_to_workers(
+    async fn send_delete_requests(
         &mut self,
         certificates: Vec<Certificate>,
     ) -> Vec<(RequestKey, oneshot::Receiver<DeleteBatchResult>)> {

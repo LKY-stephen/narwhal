@@ -5,7 +5,8 @@ use bytes::{BufMut as _, BytesMut};
 use clap::{crate_name, crate_version, App, AppSettings};
 use eyre::Context;
 use futures::{future::join_all, StreamExt};
-use rand::Rng;
+use rand::{Rng, RngCore, SeedableRng};
+use rand_chacha::ChaCha8Rng;
 use tokio::{
     net::TcpStream,
     time::{interval, sleep, Duration, Instant},
@@ -139,9 +140,11 @@ impl Client {
 
         // Submit all transactions.
         let mut counter = 0;
-        let mut r = rand::thread_rng().gen();
+        let mut rng = ChaCha8Rng::seed_from_u64(self.target.port().unwrap().try_into().unwrap());
+        let mut r = rng.gen();
+        let client_id: u64 = rng.next_u64();
+        let mut txo: u64 = rng.next_u64();
         let interval = interval(Duration::from_millis(BURST_DURATION));
-        let client_id: u64 = rand::thread_rng().gen();
         tokio::pin!(interval);
 
         // NOTE: This log entry is used to compute performance.
@@ -153,6 +156,8 @@ impl Client {
 
             let mut tx = BytesMut::with_capacity(self.size);
             let size = self.size;
+
+            // move in the following map copy the random value r and txo, so we need to update it outside of map.
             let stream = tokio_stream::iter(0..burst).map(move |x| {
                 if x == counter % burst {
                     // NOTE: This log entry is used to compute performance.
@@ -160,12 +165,17 @@ impl Client {
 
                     tx.put_u8(0u8); // Sample txs start with 0.
                     tx.put_u64(client_id + counter); // This counter identifies the tx.
-                } else {
-                    r += 1;
-                    tx.put_u8(1u8); // Standard txs start with 1.
-                    tx.put_u64(r); // Ensures all clients send different txs.
-                };
 
+                    tx.put_u8(2); // push inputs
+                    tx.put_u64(txo + x);
+                    tx.put_u64(txo + burst);
+                } else {
+                    tx.put_u8(1u8); // Standard txs start with 1.
+                    tx.put_u64(r + x); // Ensures all clients send different txs.
+
+                    tx.put_u8(1); // push inputs
+                    tx.put_u64(txo + x);
+                };
                 tx.resize(size, 0u8);
                 let bytes = tx.split().freeze();
                 TransactionProto { transaction: bytes }
@@ -181,6 +191,10 @@ impl Client {
                 warn!("Transaction rate too high for this client");
             }
             counter += 1;
+
+            // update random value to makesure all txs are different!
+            txo = rng.next_u64();
+            r = rng.next_u64();
         }
         Ok(())
     }

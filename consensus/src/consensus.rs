@@ -8,6 +8,7 @@ use crate::{metrics::ConsensusMetrics, ConsensusOutput, SequenceNumber};
 use config::Committee;
 use crypto::PublicKey;
 use fastcrypto::Hash;
+use serde::{Deserialize, Serialize};
 use std::{
     cmp::{max, Ordering},
     collections::HashMap,
@@ -23,6 +24,9 @@ use types::{
 
 /// The representation of the DAG in memory.
 pub type Dag = HashMap<Round, HashMap<PublicKey, (CertificateDigest, Certificate)>>;
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct NodeVotes(Vec<Round>);
 
 /// The state that needs to be persisted for crash-recovery.
 pub struct ConsensusState {

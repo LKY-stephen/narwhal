@@ -101,6 +101,7 @@ async fn synchronize_when_batch_exists() {
 
     // Store the batch.
     let batch = test_utils::batch();
+    let meta = batch.get_meta_data();
     let batch_id = batch.digest();
     let missing = vec![batch_id];
     store.write(batch_id, batch).await;
@@ -113,11 +114,12 @@ async fn synchronize_when_batch_exists() {
         target,
     };
     let responder_handle = tokio::spawn(async move {
-        if let WorkerPrimaryMessage::OthersBatch(recv_digest, meta, recv_id) =
+        if let WorkerPrimaryMessage::OthersBatch(recv_digest, recv_meta, recv_id) =
             rx_primary.recv().await.unwrap()
         {
             assert_eq!(recv_digest, batch_id);
             assert_eq!(recv_id, id);
+            assert_eq!(recv_meta, meta);
         } else {
             panic!("received unexpected WorkerPrimaryMessage");
         }

@@ -9,6 +9,9 @@ use prometheus::{
 pub struct ExecutorMetrics {
     /// occupancy of the channel from the `Subscriber` to `Core`
     pub tx_executor: IntGauge,
+
+    /// occupancy of the channel from the `Subscriber` to `Core`
+    pub tx_fast_commit_batch: IntGauge,
     /// Time it takes to download a payload from local worker peer
     pub subscriber_local_fetch_latency: Histogram,
     /// Time it takes to download a payload from remote peer
@@ -30,6 +33,12 @@ impl ExecutorMetrics {
             tx_executor: register_int_gauge_with_registry!(
                 "tx_executor",
                 "occupancy of the channel from the `Subscriber` to `Core`",
+                registry
+            )
+            .unwrap(),
+            tx_fast_commit_batch: register_int_gauge_with_registry!(
+                "tx_fast_commit_batch",
+                "occupancy of the channel from the `Subscriber` to `notifer` for fast commit",
                 registry
             )
             .unwrap(),

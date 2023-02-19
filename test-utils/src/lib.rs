@@ -138,7 +138,7 @@ pub fn make_consensus_store(store_path: &std::path::Path) -> Arc<ConsensusStore>
 
     let (last_committed_map, sequence_map) = reopen!(&rocksdb,
         LAST_COMMITTED_CF;<PublicKey, Round>,
-        SEQUENCE_CF;<SequenceNumber, CertificateDigest>
+        SEQUENCE_CF;<SequenceNumber, Vec<CertificateDigest>>
     );
 
     Arc::new(ConsensusStore::new(last_committed_map, sequence_map))

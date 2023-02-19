@@ -448,9 +448,6 @@ impl Core {
         // Store the certificate.
         self.certificate_store.write(certificate.clone())?;
 
-        // Send certificates to a vote counter
-        // 
-
         let certificate_source = if self.name.eq(&certificate.header.author) {
             "own"
         } else {

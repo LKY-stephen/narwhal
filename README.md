@@ -1,6 +1,6 @@
-# Narwhal+ code base
+# Board and Clerk code base
 
-An implementation of Narwhal variant with lower latency. Not for production.
+An implementation of Board and Clerk with lower practical latency through fast commitment. Not for production.
 
 
 # Narwhal development now happens at https://github.com/MystenLabs/sui/tree/main/narwhal

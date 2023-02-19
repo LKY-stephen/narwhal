@@ -12,12 +12,15 @@ use futures::stream::FuturesOrdered;
 use futures::FutureExt;
 use futures::StreamExt;
 
+use itertools::Itertools;
 use network::P2pNetwork;
 use network::PrimaryToWorkerRpc;
 
 use anyhow::bail;
+use core::result::Result::Ok;
 use prometheus::IntGauge;
-use std::future::Future;
+use std::collections::HashMap;
+
 use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
@@ -43,9 +46,18 @@ pub struct Subscriber<Network> {
     rx_consensus: metered_channel::Receiver<ConsensusOutput>,
     /// Ordered batches for the consumer
     tx_notifier: metered_channel::Sender<(BatchIndex, Batch)>,
+
+    // receive fast comiit request from consensus
+    rx_fast_commit: metered_channel::Receiver<HashMap<BatchDigest, WorkerId>>,
+
+    // send fast comiit request to notifier
+    tx_fast_commit: metered_channel::Sender<Batch>,
     /// The metrics handler
     metrics: Arc<ExecutorMetrics>,
+    // the fetcher for communication
     fetcher: Fetcher<Network>,
+    // cache for batches
+    cache: HashMap<BatchDigest, Batch>,
 }
 
 struct Fetcher<Network> {
@@ -62,8 +74,10 @@ pub fn spawn_subscriber(
     rx_reconfigure: watch::Receiver<ReconfigureNotification>,
     rx_consensus: metered_channel::Receiver<ConsensusOutput>,
     tx_notifier: metered_channel::Sender<(BatchIndex, Batch)>,
+    rx_fast_commit: metered_channel::Receiver<HashMap<BatchDigest, WorkerId>>,
+    tx_fast_commit: metered_channel::Sender<Batch>,
     metrics: Arc<ExecutorMetrics>,
-    restored_consensus_output: ConsensusOutput,
+    restored_consensus_output: Vec<ConsensusOutput>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         // This is ugly but has to be done this way for now
@@ -87,7 +101,10 @@ pub fn spawn_subscriber(
             rx_consensus,
             metrics,
             tx_notifier,
+            rx_fast_commit,
+            tx_fast_commit,
             fetcher,
+            cache: HashMap::new(),
         };
         subscriber
             .run(restored_consensus_output)
@@ -101,7 +118,10 @@ impl<Network: SubscriberNetwork> Subscriber<Network> {
     const MAX_PENDING_PAYLOADS: usize = 32;
 
     /// Main loop connecting to the consensus to listen to sequence messages.
-    async fn run(mut self, restored_consensus_output: ConsensusOutput) -> SubscriberResult<()> {
+    async fn run(
+        mut self,
+        restored_consensus_output: Vec<ConsensusOutput>,
+    ) -> SubscriberResult<()> {
         // It's important to have the futures in ordered fashion as we want
         // to guarantee that will deliver to the executor the certificates
         // in the same order we received from rx_consensus. So it doesn't
@@ -109,15 +129,34 @@ impl<Network: SubscriberNetwork> Subscriber<Network> {
         // certificate. Unless the earlier certificate's payload has been
         // fetched, no later certificate will be delivered.
         let mut waiting = FuturesOrdered::new();
+        let mut fast_commit_waiting = FuturesOrdered::new();
 
         // First handle any consensus output messages that were restored due to a restart.
         // This needs to happen before we start listening on rx_consensus and receive messages sequenced after these.
-        for (cert, index) in restored_consensus_output.certificates {
-            let futures = self.fetcher.fetch_payloads(cert, index);
-            for future in futures {
-                // todo - limit number pending futures on startup
-                waiting.push_back(future);
-                self.metrics.subscriber_recovered_certificates_count.inc();
+        for consensus in restored_consensus_output {
+            for cert in consensus.blocks {
+                for (batch_index, (digest, worker_id)) in
+                    self.get_batch_index(&cert, consensus.index)
+                {
+                    if let Some(batch) = self.cache.remove(&digest) {
+                        // read from cache for fast committed batches
+                        waiting.push_back(async { (batch_index, batch) }.boxed());
+                    } else {
+                        // todo - limit number pending futures on startup
+                        let mut workers = self
+                            .fetcher
+                            .network
+                            .workers_for_certificate(&cert, &worker_id);
+                        workers.shuffle(&mut ThreadRng::default());
+                        waiting.push_back(
+                            self.fetcher
+                                .fetch_payload(digest, worker_id, workers)
+                                .map(move |batch| (batch_index, batch))
+                                .boxed(),
+                        );
+                        self.metrics.subscriber_recovered_certificates_count.inc();
+                    }
+                }
             }
         }
 
@@ -129,15 +168,29 @@ impl<Network: SubscriberNetwork> Subscriber<Network> {
                     // We can schedule more then MAX_PENDING_PAYLOADS payloads but
                     // don't process more consensus messages when more
                     // then MAX_PENDING_PAYLOADS is pending
-
-                    for (cert, index) in message.certificates {
-                        for future in self.fetcher.fetch_payloads(cert,index){
-
-                            waiting.push_back(future)
+                    for cert in message.blocks {
+                        for (batch_index, (digest, worker_id)) in self.get_batch_index(&cert, message.index)
+                        {
+                            if let Some(batch) = self.cache.remove(&digest) {
+                                // read from cache for fast committed batches
+                                waiting.push_back(async { (batch_index, batch) }.boxed());
+                            } else {
+                                // todo - limit number pending futures on startup
+                                let mut workers = self
+                                    .fetcher
+                                    .network
+                                    .workers_for_certificate(&cert, &worker_id);
+                                workers.shuffle(&mut ThreadRng::default());
+                                waiting.push_back(
+                                    self.fetcher
+                                        .fetch_payload(digest, worker_id, workers)
+                                        .map(move |batch| (batch_index, batch))
+                                        .boxed(),
+                                );
+                            }
                         }
                     }
-                },
-
+                }
                 // Receive here consensus messages for which we have downloaded all transactions data.
                 (message, permit) = join(waiting.next(), self.tx_notifier.reserve()), if !waiting.is_empty() => {
                     if let Ok(permit) = permit {
@@ -156,6 +209,33 @@ impl<Network: SubscriberNetwork> Subscriber<Network> {
                         return Ok(());
                     }
                 }
+
+                // Check whether the committee changed.
+                // for simplicity, we wait here. But this is very inefficient
+
+                Some(request) = self.rx_fast_commit.recv() => {
+                    for (digest, id) in request {
+                        // if failed, we just not fast commit the batch, not a big probelm
+                        fast_commit_waiting.push_back(
+                            self.fetcher
+                                .try_fetch_locally(digest, id)
+                                .boxed(),
+                        );
+                    }
+                }
+
+                (message, permit) = join(fast_commit_waiting.next(), self.tx_fast_commit.reserve()), if !fast_commit_waiting.is_empty() => {
+                    match message {
+                        Some(Some(batch)) => {if let Ok(permit) = permit {
+                            permit.send(batch);
+                        } else {
+                            tracing::warn!("tx_fast_commit to notifier close");
+                        }},
+                        Some(None) => {tracing::warn!("Local worker does not have the batch");}
+                        None => {tracing::warn!("Failed to send fast commit batch");}
+                    }
+
+                },
             }
 
             self.metrics
@@ -163,36 +243,36 @@ impl<Network: SubscriberNetwork> Subscriber<Network> {
                 .set(waiting.len() as i64);
         }
     }
-}
 
-impl<Network: SubscriberNetwork> Fetcher<Network> {
     /// Returns ordered vector of futures for downloading individual payloads for certificate
     /// Order of futures returned follows order of payloads in the certificate
     /// See fetch_payload for more details
-    fn fetch_payloads(
+    fn get_batch_index(
         &self,
-        deliver: Certificate,
+        deliver: &Certificate,
         index: u64,
-    ) -> Vec<impl Future<Output = (BatchIndex, Batch)> + '_> {
+    ) -> Vec<(BatchIndex, (BatchDigest, WorkerId))> {
         debug!("Fetching payload for {:?}", deliver);
-        let mut ret = vec![];
-        for (batch_index, (digest, worker_id)) in deliver.header.payload.iter().enumerate() {
-            let mut workers = self.network.workers_for_certificate(&deliver, worker_id);
-            let batch_index = BatchIndex {
-                certificate: deliver.clone(),
-                next_certificate_index: index,
-                batch_index: batch_index as u64,
-            };
-            workers.shuffle(&mut ThreadRng::default());
-            ret.push(
-                self.fetch_payload(*digest, *worker_id, workers)
-                    .map(move |batch| (batch_index, batch)),
-            );
-        }
-
-        ret
+        deliver
+            .header
+            .payload
+            .iter()
+            .enumerate()
+            .map(|(bid, (digest, wid))| {
+                (
+                    BatchIndex {
+                        certificate: deliver.clone(),
+                        next_block_index: index + 1,
+                        batch_index: bid as u64,
+                    },
+                    (digest.to_owned(), wid.to_owned()),
+                )
+            })
+            .collect_vec()
     }
+}
 
+impl<Network: SubscriberNetwork> Fetcher<Network> {
     /// Fetches single payload from network
     /// This future performs infinite retries and blocks until Batch is available
     /// As an optimization it tries to download from local worker first, but then fans out
@@ -350,7 +430,7 @@ impl SubscriberNetwork for SubscriberNetworkImpl {
         certificate: &Certificate,
         worker_id: &WorkerId,
     ) -> Vec<NetworkPublicKey> {
-        let authorities = certificate.signed_authorities(&(self.committee));
+        let authorities = certificate.signed_authorities(&self.committee);
         authorities
             .into_iter()
             .filter_map(|authority| {

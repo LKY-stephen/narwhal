@@ -22,13 +22,14 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
     fmt::{self},
 };
 
 /// The round number.
 pub type Round = u64;
-
+pub type TransactionId = u64;
+pub type TransactionInput = u64;
 pub type Transaction = Vec<u8>;
 #[derive(Clone, Serialize, Deserialize, Default, Debug, PartialEq, Eq, Arbitrary)]
 pub struct Batch(pub Vec<Transaction>);
@@ -37,26 +38,31 @@ pub struct Batch(pub Vec<Transaction>);
 pub struct BatchMeta(pub HashMap<u64, u64>);
 
 impl Batch {
+    /// Warning, this is a experimental implementation for benchclient,
+    /// Need to change according to the real transaction definition.
     pub fn get_meta_data(&self) -> BatchMeta {
         let mut meta = HashMap::new();
         for tx in self.0.clone() {
-            let input_len = tx[9];
-            let tx_id = u64::from_be_bytes(tx[1..9].try_into().unwrap());
+            let tx_id = get_transaction_id(&tx);
             // make sure the inputs is bigger than zero
-            let mut start = 10;
-            for _ in 0..input_len {
-                let txo = u64::from_be_bytes(tx[start..start + 8].try_into().unwrap());
+            let txos = get_transaction_inputs(&tx);
 
-                // batch should not have conflicted txs.
+            for txo in txos {
                 if let Some(oldtx) = meta.insert(txo, tx_id) {
-                    panic!("Batch contains conflicted tx {tx_id} {oldtx}")
+                    panic!("Batch contains conflicted tx {tx_id} {oldtx}");
                 }
-                start = start + 8;
             }
         }
         return BatchMeta(meta);
     }
 }
+
+impl BatchMeta {
+    pub fn get_txos(&self) -> HashSet<u64> {
+        self.0.keys().copied().collect()
+    }
+}
+
 #[derive(
     Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq, Hash, PartialOrd, Ord, MallocSizeOf,
 )]
@@ -850,4 +856,23 @@ pub struct RoundVoteDigestPair {
     pub round: Round,
     /// The hash of the vote used to ensure equality
     pub vote_digest: VoteDigest,
+}
+
+pub fn get_transaction_id(tx: &Transaction) -> TransactionId {
+    assert!(tx[0] == 1 || tx[0] == 0);
+    assert!(tx.len() > 9);
+    u64::from_be_bytes(tx.to_owned()[1..9].try_into().unwrap())
+}
+
+pub fn get_transaction_inputs(tx: &Transaction) -> Vec<TransactionInput> {
+    // make sure the inputs is bigger than zero
+    let mut inputs = vec![];
+    let mut start = 10;
+    for _ in 0..tx[9] {
+        let txo = u64::from_be_bytes(tx[start..start + 8].try_into().unwrap());
+        // batch should not have conflicted txs.
+        inputs.push(txo);
+        start = start + 8;
+    }
+    inputs
 }

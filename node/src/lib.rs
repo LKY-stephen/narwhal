@@ -2,14 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 use config::{Parameters, SharedCommittee, SharedWorkerCache, WorkerId};
 use consensus::{
+    board::Board,
     clerk::Clerk,
-    consensus::NodeVotes,
     // bullshark::Bullshark,
     dag::Dag,
     metrics::{ChannelMetrics, ConsensusMetrics},
     // tusk::Tusk,
     Consensus,
-    ConsensusOutput,
 };
 
 use crypto::{KeyPair, NetworkKeyPair, PublicKey};
@@ -19,13 +18,10 @@ use itertools::Itertools;
 use network::P2pNetwork;
 use primary::{NetworkModel, PayloadToken, Primary, PrimaryChannelMetrics};
 use prometheus::{IntGauge, Registry};
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 use storage::{CertificateStore, CertificateToken};
-use store::{
-    reopen,
-    rocks::{open_cf, DBMap},
-    Store,
-};
+use store::rocks::DBMap;
+use store::{reopen, rocks::open_cf, Store};
 use tokio::sync::oneshot;
 use tokio::{sync::watch, task::JoinHandle};
 use tracing::{debug, info};
@@ -50,9 +46,6 @@ pub struct NodeStorage {
     pub temp_batch_store: Store<(CertificateDigest, BatchDigest), Batch>,
 
     pub batch_meta_store: Arc<Store<BatchDigest, BatchMeta>>,
-    pub batch_votes_store: Store<BatchDigest, NodeVotes>,
-    pub tx_votes_store: Store<u64, NodeVotes>,
-    pub txo_tx_store: Store<u64, Vec<u64>>,
 }
 
 impl NodeStorage {
@@ -66,10 +59,7 @@ impl NodeStorage {
     const LAST_COMMITTED_CF: &'static str = "last_committed";
     const SEQUENCE_CF: &'static str = "sequence";
     const TEMP_BATCH_CF: &'static str = "temp_batches";
-    const BATCH_VOTES_CF: &'static str = "batches_votes";
     const BATCH_META_CF: &'static str = "batches_meta";
-    const TX_VOTES_CF: &'static str = "txs_votes";
-    const TXO_TX_CF: &'static str = "txo_tx";
 
     /// Open or reopen all the storage of the node.
     pub fn reopen<Path: AsRef<std::path::Path>>(store_path: Path) -> Self {
@@ -86,10 +76,7 @@ impl NodeStorage {
                 Self::LAST_COMMITTED_CF,
                 Self::SEQUENCE_CF,
                 Self::TEMP_BATCH_CF,
-                Self::BATCH_VOTES_CF,
                 Self::BATCH_META_CF,
-                Self::TX_VOTES_CF,
-                Self::TXO_TX_CF,
             ],
         )
         .expect("Cannot open database");
@@ -105,9 +92,6 @@ impl NodeStorage {
             sequence_map,
             temp_batch_map,
             batch_meta_store,
-            batch_votes_store,
-            tx_votes_store,
-            txo_tx_store,
         ) = reopen!(&rocksdb,
             Self::VOTES_CF;<PublicKey, RoundVoteDigestPair>,
             Self::HEADERS_CF;<HeaderDigest, Header>,
@@ -116,12 +100,9 @@ impl NodeStorage {
             Self::PAYLOAD_CF;<(BatchDigest, WorkerId), PayloadToken>,
             Self::BATCHES_CF;<BatchDigest, Batch>,
             Self::LAST_COMMITTED_CF;<PublicKey, Round>,
-            Self::SEQUENCE_CF;<SequenceNumber, CertificateDigest>,
+            Self::SEQUENCE_CF;<SequenceNumber, Vec<CertificateDigest>>,
             Self::TEMP_BATCH_CF;<(CertificateDigest, BatchDigest), Batch>,
-            Self::BATCH_META_CF;<BatchDigest, BatchMeta>,
-            Self::BATCH_VOTES_CF;<BatchDigest, NodeVotes>,
-            Self::TX_VOTES_CF;<u64, NodeVotes>,
-            Self::TXO_TX_CF;<u64, Vec<u64>>
+            Self::BATCH_META_CF;<BatchDigest, BatchMeta>
         );
 
         let vote_digest_store = Store::new(votes_map);
@@ -132,9 +113,6 @@ impl NodeStorage {
         let consensus_store = Arc::new(ConsensusStore::new(last_committed_map, sequence_map));
         let temp_batch_store = Store::new(temp_batch_map);
         let batch_meta_store = Arc::new(Store::new(batch_meta_store));
-        let batch_votes_store = Store::new(batch_votes_store);
-        let tx_votes_store = Store::new(tx_votes_store);
-        let txo_tx_store = Store::new(txo_tx_store);
 
         Self {
             vote_digest_store,
@@ -145,9 +123,6 @@ impl NodeStorage {
             consensus_store,
             temp_batch_store,
             batch_meta_store,
-            batch_votes_store,
-            tx_votes_store,
-            txo_tx_store,
         }
     }
 }
@@ -244,7 +219,7 @@ impl Node {
             )
             .await?;
             handles.extend(consensus_handles);
-            (None, NetworkModel::PartiallySynchronous)
+            (None, NetworkModel::Asynchronous)
         };
 
         // Inject memory profiling here if we build with dhat-heap feature flag
@@ -333,6 +308,11 @@ impl Node {
         let (tx_sequence, rx_sequence) =
             metered_channel::channel(Self::CHANNEL_CAPACITY, &channel_metrics.tx_sequence);
 
+        let (tx_results, rx_results) =
+            metered_channel::channel(Self::CHANNEL_CAPACITY, &channel_metrics.tx_result);
+
+        let (tx_fast_commit, rx_fast_commit) =
+            metered_channel::channel(Self::CHANNEL_CAPACITY, &channel_metrics.tx_fast_commit);
         // Check for any certs that have been sent by consensus but were not processed by the executor.
         let restored_consensus_output = get_restored_consensus_output(
             store.consensus_store.clone(),
@@ -340,9 +320,8 @@ impl Node {
             &execution_state,
         )
         .await?
-        .certificates
         .into_iter()
-        .sorted_by(|a, b| a.1.cmp(&b.1))
+        .sorted_by(|a, b| a.index.cmp(&b.index))
         .collect::<Vec<_>>();
 
         let len_restored = restored_consensus_output.len() as u64;
@@ -373,10 +352,12 @@ impl Node {
             (**committee.load()).clone(),
             store.consensus_store.clone(),
             parameters.gc_depth,
+        );
+
+        let counter = Board::new(
+            &(**committee.load()).clone(),
             store.batch_meta_store.clone(),
-            store.batch_votes_store.clone(),
-            store.tx_votes_store.clone(),
-            store.txo_tx_store.clone(),
+            tx_fast_commit,
         );
         let consensus_handles = Consensus::spawn(
             (**committee.load()).clone(),
@@ -386,7 +367,9 @@ impl Node {
             /* rx_primary */ rx_new_certificates,
             /* tx_primary */ tx_feedback,
             /* tx_output */ tx_sequence,
+            tx_results,
             ordering_engine,
+            counter,
             consensus_metrics.clone(),
             parameters.gc_depth,
         );
@@ -401,11 +384,10 @@ impl Node {
             execution_state,
             tx_reconfigure,
             /* rx_consensus */ rx_sequence,
+            rx_results,
+            rx_fast_commit,
             registry,
-            ConsensusOutput {
-                certificates: restored_consensus_output,
-                transactions: HashMap::new(),
-            },
+            restored_consensus_output,
         )?;
 
         Ok(executor_handles

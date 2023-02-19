@@ -4,7 +4,7 @@
 
 #![allow(clippy::mutable_key_type)]
 
-use crate::{metrics::ConsensusMetrics, ConsensusOutput, SequenceNumber};
+use crate::{board::Board, metrics::ConsensusMetrics, ConsensusOutput, SequenceNumber, TxResults};
 use config::Committee;
 use crypto::PublicKey;
 use fastcrypto::Hash;
@@ -26,7 +26,32 @@ use types::{
 pub type Dag = HashMap<Round, HashMap<PublicKey, (CertificateDigest, Certificate)>>;
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
-pub struct NodeVotes(HashMap<PublicKey, Round>);
+pub struct NodeVotes(pub HashMap<PublicKey, Round>);
+
+impl NodeVotes {
+    // create a new vote
+    pub fn new(voter: &PublicKey, round: Round) -> Self {
+        let mut map = HashMap::new();
+        map.insert(voter.to_owned(), round);
+        NodeVotes(map)
+    }
+
+    // update the vote of a give voter and round
+    pub fn update(&mut self, voter: &PublicKey, round: Round) -> bool {
+        // if not exist, then it must changed
+        let mut changed = !self.0.contains_key(voter);
+        self.0
+            .entry(voter.to_owned())
+            .and_modify(|r| {
+                if *r > round {
+                    changed = true;
+                    *r = round;
+                }
+            })
+            .or_insert(round);
+        return changed;
+    }
+}
 
 /// The state that needs to be persisted for crash-recovery.
 pub struct ConsensusState {
@@ -171,7 +196,7 @@ pub trait ConsensusProtocol {
         consensus_index: SequenceNumber,
         // The new certificate.
         certificate: Certificate,
-    ) -> StoreResult<ConsensusOutput>;
+    ) -> StoreResult<Vec<ConsensusOutput>>;
 
     fn update_committee(&mut self, new_committee: Committee) -> StoreResult<()>;
 }
@@ -187,15 +212,20 @@ pub struct Consensus<ConsensusProtocol> {
     rx_primary: metered_channel::Receiver<Certificate>,
     /// Outputs the sequence of ordered certificates to the primary (for cleanup and feedback).
     tx_primary: metered_channel::Sender<Certificate>,
-    /// Outputs the sequence of ordered certificates to the application layer.
+    /// Outputs the committed hyper block to the application layer.
     tx_output: metered_channel::Sender<ConsensusOutput>,
 
+    /// Outputs the results to the application layer.
+    tx_result: metered_channel::Sender<TxResults>,
     /// The (global) consensus index. We assign one index to each sequenced certificate. this is
     /// helpful for clients.
     consensus_index: SequenceNumber,
 
     /// The consensus protocol to run.
     protocol: ConsensusProtocol,
+
+    // tx votes counter
+    board: Board,
 
     /// Metrics handler
     metrics: Arc<ConsensusMetrics>,
@@ -214,7 +244,9 @@ where
         rx_primary: metered_channel::Receiver<Certificate>,
         tx_primary: metered_channel::Sender<Certificate>,
         tx_output: metered_channel::Sender<ConsensusOutput>,
+        tx_result: metered_channel::Sender<TxResults>,
         protocol: Protocol,
+        counter: Board,
         metrics: Arc<ConsensusMetrics>,
         gc_depth: Round,
     ) -> JoinHandle<()> {
@@ -229,8 +261,10 @@ where
                 rx_primary,
                 tx_primary,
                 tx_output,
+                tx_result,
                 consensus_index,
                 protocol,
+                board: counter,
                 metrics,
             }
             .run(recovered_last_committed, cert_store, gc_depth)
@@ -297,44 +331,57 @@ where
                         }
                     }
 
+                    // counting tx votes
+                    if !self.board.process_certificate(&mut state.dag,&certificate).await{
+                        tracing::warn!("duplicated certificate");
+                        continue;
+                    };
+                    let r =  certificate.header.round;
+
                     // Process the certificate using the selected consensus protocol.
-                    let output =
+                    if r % 2 != 0 || r < 4 {
+
+                        let consensusu_outputs =
                         self.protocol
-                            .process_certificate(&mut state, self.consensus_index, certificate)?;
+                            .process_certificate(&mut state, self.consensus_index, certificate.clone())?;
 
-                    // Update the consensus index.
-                    self.consensus_index += output.certificates.len() as u64;
+                        // Update the consensus index.
+                        self.consensus_index += consensusu_outputs.len() as u64;
 
-                    // Output the sequence in the right order.
-                    for (cert, index) in output.certificates.clone() {
-                        let certificate = &cert;
-                        #[cfg(not(feature = "benchmark"))]
-                        if index% 5_000 == 0 {
-                            tracing::debug!("Committed {}", certificate.header);
+                        // Output the sequence in the right order.
+                        for output in consensusu_outputs.clone() {
+                            let index = output.index;
+
+                            let res = self.board.output_results(output.blocks.clone());
+
+                            #[cfg(not(feature = "benchmark"))]
+                            if index% 500 == 0 {
+                                tracing::debug!("Committed leader {}", &output.leader.digest());
+                            }
+
+                            for sub_block in output.blocks.clone(){
+
+                                self.tx_primary.send(sub_block).await.expect("Failed to send certificate to primary");
+                            }
+
+                            // Update DAG size metric periodically to limit computation cost.
+                            // TODO: this should be triggered on collection when library support for
+                            // closure metrics is available.
+                            if index % 100 == 0 {
+                                self.metrics
+                                    .dag_size_bytes
+                                    .set((mysten_util_mem::malloc_size(&state.dag) + std::mem::size_of::<Dag>()) as i64);
+                            }
+
+                            if let Err(e) = self.tx_result.send(res.await).await {
+                                tracing::warn!("Failed to output tx results: {e}");
+                            }
+
+                            if let Err(e) = self.tx_output.send(output).await {
+                                tracing::warn!("Failed to output consensus output: {e}");
+                            }
+
                         }
-
-                        #[cfg(feature = "benchmark")]
-                        for digest in certificate.header.payload.keys() {
-                            // NOTE: This log entry is used to compute performance.
-                            tracing::info!("Committed {} -> {:?}", certificate.header, digest);
-                        }
-
-                        // Update DAG size metric periodically to limit computation cost.
-                        // TODO: this should be triggered on collection when library support for
-                        // closure metrics is available.
-                        if index % 1_000 == 0 {
-                            self.metrics
-                                .dag_size_bytes
-                                .set((mysten_util_mem::malloc_size(&state.dag) + std::mem::size_of::<Dag>()) as i64);
-                        }
-
-                        self.tx_primary
-                            .send(certificate.clone())
-                            .await
-                            .expect("Failed to send certificate to primary");
-                    }
-                    if let Err(e) = self.tx_output.send(output).await {
-                        tracing::warn!("Failed to output certificate: {e}");
                     }
 
                     self.metrics
@@ -356,6 +403,7 @@ where
                         }
                         ReconfigureNotification::Shutdown => return Ok(())
                     }
+                    self.board.change_committee(&self.committee);
                     tracing::debug!("Committee updated to {}", self.committee);
                 }
             }

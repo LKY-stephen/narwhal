@@ -5,8 +5,6 @@ use crate::metrics::WorkerMetrics;
 #[cfg(feature = "trace_transaction")]
 use byteorder::{BigEndian, ReadBytesExt};
 use config::Committee;
-#[cfg(feature = "benchmark")]
-use std::convert::TryInto;
 use std::sync::Arc;
 use tokio::{
     sync::watch,
@@ -132,23 +130,24 @@ impl BatchMaker {
         #[cfg(feature = "benchmark")]
         {
             use fastcrypto::Hash;
+            use types::get_transaction_id;
             let digest = batch.digest();
 
             // Look for sample txs (they all start with 0) and gather their txs id (the next 8 bytes).
             let tx_ids: Vec<_> = batch
                 .0
                 .iter()
-                .filter(|tx| tx[0] == 0u8 && tx.len() > 9)
-                .filter_map(|tx| tx[1..9].try_into().ok())
+                .filter_map(|tx| {
+                    if tx[0] == 0u8 && tx.len() > 9 {
+                        return Some(get_transaction_id(&tx));
+                    }
+                    None
+                })
                 .collect();
 
             for id in tx_ids {
                 // NOTE: This log entry is used to compute performance.
-                tracing::info!(
-                    "Batch {:?} contains sample tx {}",
-                    digest,
-                    u64::from_be_bytes(id),
-                );
+                tracing::info!("Batch {:?} contains sample tx {id}", digest,);
             }
 
             #[cfg(feature = "trace_transaction")]
@@ -159,7 +158,7 @@ impl BatchMaker {
                 let tracking_ids: Vec<_> = batch
                     .0
                     .iter()
-                    .map(|tx| {
+                    .fil(|tx| {
                         let len = tx.len();
                         if len >= 8 {
                             (&tx[0..8]).read_u64::<BigEndian>().unwrap_or_default()

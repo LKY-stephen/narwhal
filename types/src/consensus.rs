@@ -4,7 +4,7 @@
 
 use crate::{CertificateDigest, Round};
 use crypto::PublicKey;
-use std::{collections::HashMap, ops::RangeInclusive};
+use std::collections::HashMap;
 use store::{
     rocks::{DBMap, TypedStoreError},
     traits::Map,
@@ -25,14 +25,14 @@ pub struct ConsensusStore {
     /// The latest committed round of each validator.
     last_committed: DBMap<PublicKey, Round>,
     /// The global consensus sequence.
-    sequence: DBMap<SequenceNumber, CertificateDigest>,
+    sequence: DBMap<SequenceNumber, Vec<CertificateDigest>>,
 }
 
 impl ConsensusStore {
     /// Create a new consensus store structure by using already loaded maps.
     pub fn new(
         last_committed: DBMap<PublicKey, Round>,
-        sequence: DBMap<SequenceNumber, CertificateDigest>,
+        sequence: DBMap<SequenceNumber, Vec<CertificateDigest>>,
     ) -> Self {
         Self {
             last_committed,
@@ -52,13 +52,13 @@ impl ConsensusStore {
         &self,
         last_committed: &HashMap<PublicKey, Round>,
         consensus_index: &SequenceNumber,
-        certificate_id: &CertificateDigest,
+        certificate_ids: &Vec<CertificateDigest>,
     ) -> Result<(), TypedStoreError> {
         let mut write_batch = self.last_committed.batch();
         write_batch = write_batch.insert_batch(&self.last_committed, last_committed.iter())?;
         write_batch = write_batch.insert_batch(
             &self.sequence,
-            std::iter::once((consensus_index, certificate_id)),
+            std::iter::once((consensus_index, certificate_ids)),
         )?;
         write_batch.write()
     }
@@ -71,15 +71,9 @@ impl ConsensusStore {
     /// Load the certificate digests sequenced at a specific indices.
     pub fn read_sequenced_certificates(
         &self,
-        missing: &RangeInclusive<SequenceNumber>,
-    ) -> StoreResult<Vec<Option<CertificateDigest>>> {
-        Ok(self
-            .sequence
-            .iter()
-            .skip_to(missing.start())?
-            .take_while(|(index, _)| index <= missing.end())
-            .map(|(_, digest)| Some(digest))
-            .collect())
+        missing: SequenceNumber,
+    ) -> StoreResult<Option<Vec<CertificateDigest>>> {
+        Ok(self.sequence.get(&missing).ok().unwrap())
     }
 
     /// Load the last (ie. the highest) consensus index associated to a certificate.

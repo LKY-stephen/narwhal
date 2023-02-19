@@ -86,6 +86,10 @@ pub struct ChannelMetrics {
     /// * tx_new_certificates where the newly created certificates are sent
     /// from `primary::Core` to `Consensus`
     pub tx_sequence: IntGauge,
+
+    pub tx_result: IntGauge,
+
+    pub tx_fast_commit: IntGauge,
 }
 
 impl ChannelMetrics {
@@ -93,7 +97,19 @@ impl ChannelMetrics {
         Self {
             tx_sequence: register_int_gauge_with_registry!(
                 "tx_sequence",
-                "occupancy of the channel from the `Consensus` to `SubscriberHandler`",
+                "occupancy of the channel from the `Consensus` to `SubscriberHandler` for formal commit",
+                registry
+            )
+            .unwrap(),
+            tx_result: register_int_gauge_with_registry!(
+                "tx_result",
+                "occupancy of the channel from the `Consensus` to `notifier` for results",
+                registry
+            )
+            .unwrap(),
+            tx_fast_commit: register_int_gauge_with_registry!(
+                "tx_fast_commit",
+                "occupancy of the channel from the `Consensus` to `notifier` for fast commit",
                 registry
             )
             .unwrap(),

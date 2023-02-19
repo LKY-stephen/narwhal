@@ -51,11 +51,13 @@ class LogParser:
         except (ValueError, IndexError, AttributeError) as e:
             exception(e)
             raise ParseError(f'Failed to parse nodes\' logs: {e}')
-        proposals, commits, self.configs, primary_ips, executed = zip(*results)
+        proposals, commits, self.configs, primary_ips, executed, fast_committed = zip(*results)
         self.proposals = self._merge_results([x.items() for x in proposals])
         self.commits = self._merge_results([x.items() for x in commits])
         self.executed_samples = self._merge_results(
             [x.items() for x in executed])
+        self.fast_committed_sample = self._merge_results(
+            [x.items() for x in fast_committed])
 
         # Parse the workers logs.
         try:
@@ -119,6 +121,11 @@ class LogParser:
         tmp = [(d, self._to_posix(t)) for t, d in tmp]
         commits = self._merge_results([tmp])
 
+        tmp = findall(r'(.*?) .*Fast Committed sample tx +(\d+)', log)
+        tmp = [(int(d), self._to_posix(t)) for t, d in tmp]
+        fast_committed = self._merge_results([tmp])
+
+        
         tmp = findall(r'(.*?) .*Execute sample tx +(\d+)', log)
         tmp = [(int(d), self._to_posix(t)) for t, d in tmp]
         executed = self._merge_results([tmp])
@@ -152,7 +159,7 @@ class LogParser:
 
         ip = search(r'booted on (/ip4/\d+.\d+.\d+.\d+)', log).group(1)
 
-        return proposals, commits, configs, ip, executed
+        return proposals, commits, configs, ip, executed, fast_committed
 
     def _parse_workers(self, log):
         if search(r'(?:panic|ERROR)', log) is not None:
@@ -200,6 +207,10 @@ class LogParser:
         latency = [c - self.sent_samples[d] for d, c in self.executed_samples.items()]
         return mean(latency) if latency else 0
 
+    def _fast_commit_latency(self):
+        latency = [c - self.sent_samples[d] for d, c in self.fast_committed_sample.items()]
+        return mean(latency) if latency else 0
+
     def result(self):
         header_size = self.configs[0]['header_size']
         max_header_delay = self.configs[0]['max_header_delay']
@@ -213,7 +224,8 @@ class LogParser:
         consensus_latency = self._consensus_latency() * 1_000
         consensus_tps, consensus_bps, _ = self._consensus_throughput()
         end_to_end_tps, end_to_end_bps, duration = self._end_to_end_throughput()
-        end_to_end_latency = self._end_to_end_latency() * 1_000
+        formal_commit_latency = self._end_to_end_latency() * 1_000
+        fast_commit_latency = self._fast_commit_latency() * 1_000
 
         return (
             '\n'
@@ -245,7 +257,8 @@ class LogParser:
             '\n'
             f' End-to-end TPS: {round(end_to_end_tps):,} tx/s\n'
             f' End-to-end BPS: {round(end_to_end_bps):,} B/s\n'
-            f' End-to-end latency: {round(end_to_end_latency):,} ms\n'
+            f' formal_commit latency: {round(formal_commit_latency):,} ms\n'
+            f' fast_commit latency: {round(fast_commit_latency):,} ms\n'
             '-----------------------------------------\n'
         )
 

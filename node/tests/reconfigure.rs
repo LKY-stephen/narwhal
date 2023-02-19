@@ -75,6 +75,7 @@ impl ExecutionState for SimpleExecutionState {
         _certificate: &Certificate,
         execution_indices: ExecutionIndices,
         transaction: Vec<u8>,
+        _result: bool,
     ) {
         let transaction: u64 = bincode::deserialize(&transaction).unwrap();
         // Change epoch every few certificates. Note that empty certificates are not provided to
@@ -107,7 +108,7 @@ impl ExecutionState for SimpleExecutionState {
 
         let _ = self.tx_output.send(epoch).await;
     }
-
+    async fn fast_commit(&self, _transaction: Vec<u8>) {}
     async fn load_execution_indices(&self) -> ExecutionIndices {
         ExecutionIndices::default()
     }

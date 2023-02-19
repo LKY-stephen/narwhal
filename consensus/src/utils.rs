@@ -35,6 +35,7 @@ where
             leader = prev_leader;
         }
     }
+
     to_commit
 }
 
@@ -59,6 +60,7 @@ pub fn order_dag(
     gc_depth: Round,
     leader: &Certificate,
     state: &ConsensusState,
+    sort: bool,
 ) -> Vec<Certificate> {
     debug!("Processing sub-dag of {:?}", leader);
     let mut ordered = Vec::new();
@@ -96,6 +98,8 @@ pub fn order_dag(
     ordered.retain(|x| x.round() + gc_depth >= state.last_committed_round);
 
     // Ordering the output by round is not really necessary but it makes the commit sequence prettier.
-    ordered.sort_by_key(|x| x.round());
+    if sort {
+        ordered.sort_by_key(|x| x.round());
+    }
     ordered
 }

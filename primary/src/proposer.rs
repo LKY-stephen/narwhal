@@ -58,6 +58,9 @@ pub struct Proposer {
     payload_size: usize,
     /// Metrics handler
     metrics: Arc<PrimaryMetrics>,
+
+    /// consistency check, we always propose with our last proposal
+    consistency: bool,
 }
 
 impl Proposer {
@@ -95,6 +98,7 @@ impl Proposer {
                 digests: Vec::with_capacity(2 * header_size),
                 payload_size: 0,
                 metrics,
+                consistency: true,
             }
             .run()
             .await;
@@ -232,7 +236,8 @@ impl Proposer {
             // (ii) we have enough digests (minimum header size) and we are on the happy path (we can vote for
             // the leader or the leader has enough votes to enable a commit). The latter condition only matters
             // in partially synchrony.
-            let enough_parents = !self.last_parents.is_empty();
+
+            let enough_parents = !self.last_parents.is_empty() && self.consistency;
             let enough_digests = self.payload_size >= self.header_size;
             let mut timer_expired = timer.is_elapsed();
 
@@ -248,6 +253,7 @@ impl Proposer {
 
                 // Advance to the next round.
                 self.round += 1;
+                self.consistency = false;
                 self.metrics
                     .current_round
                     .with_label_values(&[&self.committee.epoch.to_string()])
@@ -312,7 +318,11 @@ impl Proposer {
                         Ordering::Equal => {
                             // The core gives us the parents the first time they are enough to form a quorum.
                             // Then it keeps giving us all the extra parents.
-                            self.last_parents.extend(parents)
+
+                            self.last_parents.extend(parents.clone());
+                            if parents.into_iter().any(|x| x.origin() == self.name) {
+                                self.consistency = true;
+                            }
                         }
                     }
 

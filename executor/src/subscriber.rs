@@ -63,7 +63,7 @@ pub fn spawn_subscriber(
     rx_consensus: metered_channel::Receiver<ConsensusOutput>,
     tx_notifier: metered_channel::Sender<(BatchIndex, Batch)>,
     metrics: Arc<ExecutorMetrics>,
-    restored_consensus_output: Vec<ConsensusOutput>,
+    restored_consensus_output: ConsensusOutput,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         // This is ugly but has to be done this way for now
@@ -101,10 +101,7 @@ impl<Network: SubscriberNetwork> Subscriber<Network> {
     const MAX_PENDING_PAYLOADS: usize = 32;
 
     /// Main loop connecting to the consensus to listen to sequence messages.
-    async fn run(
-        mut self,
-        restored_consensus_output: Vec<ConsensusOutput>,
-    ) -> SubscriberResult<()> {
+    async fn run(mut self, restored_consensus_output: ConsensusOutput) -> SubscriberResult<()> {
         // It's important to have the futures in ordered fashion as we want
         // to guarantee that will deliver to the executor the certificates
         // in the same order we received from rx_consensus. So it doesn't
@@ -115,8 +112,8 @@ impl<Network: SubscriberNetwork> Subscriber<Network> {
 
         // First handle any consensus output messages that were restored due to a restart.
         // This needs to happen before we start listening on rx_consensus and receive messages sequenced after these.
-        for message in restored_consensus_output {
-            let futures = self.fetcher.fetch_payloads(message);
+        for (cert, index) in restored_consensus_output.certificates {
+            let futures = self.fetcher.fetch_payloads(cert, index);
             for future in futures {
                 // todo - limit number pending futures on startup
                 waiting.push_back(future);
@@ -132,8 +129,12 @@ impl<Network: SubscriberNetwork> Subscriber<Network> {
                     // We can schedule more then MAX_PENDING_PAYLOADS payloads but
                     // don't process more consensus messages when more
                     // then MAX_PENDING_PAYLOADS is pending
-                    for future in self.fetcher.fetch_payloads(message) {
-                        waiting.push_back(future);
+
+                    for (cert, index) in message.certificates {
+                        for future in self.fetcher.fetch_payloads(cert,index){
+
+                            waiting.push_back(future)
+                        }
                     }
                 },
 
@@ -170,19 +171,16 @@ impl<Network: SubscriberNetwork> Fetcher<Network> {
     /// See fetch_payload for more details
     fn fetch_payloads(
         &self,
-        deliver: ConsensusOutput,
+        deliver: Certificate,
+        index: u64,
     ) -> Vec<impl Future<Output = (BatchIndex, Batch)> + '_> {
         debug!("Fetching payload for {:?}", deliver);
         let mut ret = vec![];
-        for (batch_index, (digest, worker_id)) in
-            deliver.certificate.header.payload.iter().enumerate()
-        {
-            let mut workers = self
-                .network
-                .workers_for_certificate(&deliver.certificate, worker_id);
+        for (batch_index, (digest, worker_id)) in deliver.header.payload.iter().enumerate() {
+            let mut workers = self.network.workers_for_certificate(&deliver, worker_id);
             let batch_index = BatchIndex {
-                consensus_output: deliver.clone(),
-                next_certificate_index: deliver.consensus_index,
+                certificate: deliver.clone(),
+                next_certificate_index: index,
                 batch_index: batch_index as u64,
             };
             workers.shuffle(&mut ThreadRng::default());

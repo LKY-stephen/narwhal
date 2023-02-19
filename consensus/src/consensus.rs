@@ -26,7 +26,7 @@ use types::{
 pub type Dag = HashMap<Round, HashMap<PublicKey, (CertificateDigest, Certificate)>>;
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
-pub struct NodeVotes(Vec<Round>);
+pub struct NodeVotes(HashMap<PublicKey, Round>);
 
 /// The state that needs to be persisted for crash-recovery.
 pub struct ConsensusState {
@@ -171,7 +171,7 @@ pub trait ConsensusProtocol {
         consensus_index: SequenceNumber,
         // The new certificate.
         certificate: Certificate,
-    ) -> StoreResult<Vec<ConsensusOutput>>;
+    ) -> StoreResult<ConsensusOutput>;
 
     fn update_committee(&mut self, new_committee: Committee) -> StoreResult<()>;
 }
@@ -298,18 +298,18 @@ where
                     }
 
                     // Process the certificate using the selected consensus protocol.
-                    let sequence =
+                    let output =
                         self.protocol
                             .process_certificate(&mut state, self.consensus_index, certificate)?;
 
                     // Update the consensus index.
-                    self.consensus_index += sequence.len() as u64;
+                    self.consensus_index += output.certificates.len() as u64;
 
                     // Output the sequence in the right order.
-                    for output in sequence {
-                        let certificate = &output.certificate;
+                    for (cert, index) in output.certificates.clone() {
+                        let certificate = &cert;
                         #[cfg(not(feature = "benchmark"))]
-                        if output.consensus_index % 5_000 == 0 {
+                        if index% 5_000 == 0 {
                             tracing::debug!("Committed {}", certificate.header);
                         }
 
@@ -322,7 +322,7 @@ where
                         // Update DAG size metric periodically to limit computation cost.
                         // TODO: this should be triggered on collection when library support for
                         // closure metrics is available.
-                        if output.consensus_index % 1_000 == 0 {
+                        if index % 1_000 == 0 {
                             self.metrics
                                 .dag_size_bytes
                                 .set((mysten_util_mem::malloc_size(&state.dag) + std::mem::size_of::<Dag>()) as i64);
@@ -332,10 +332,9 @@ where
                             .send(certificate.clone())
                             .await
                             .expect("Failed to send certificate to primary");
-
-                        if let Err(e) = self.tx_output.send(output).await {
-                            tracing::warn!("Failed to output certificate: {e}");
-                        }
+                    }
+                    if let Err(e) = self.tx_output.send(output).await {
+                        tracing::warn!("Failed to output certificate: {e}");
                     }
 
                     self.metrics

@@ -2,11 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 use config::{Parameters, SharedCommittee, SharedWorkerCache, WorkerId};
 use consensus::{
+    clerk::Clerk,
     consensus::NodeVotes,
     // bullshark::Bullshark,
     dag::Dag,
     metrics::{ChannelMetrics, ConsensusMetrics},
-    tusk::Tusk,
+    // tusk::Tusk,
     Consensus,
     ConsensusOutput,
 };
@@ -18,7 +19,7 @@ use itertools::Itertools;
 use network::P2pNetwork;
 use primary::{NetworkModel, PayloadToken, Primary, PrimaryChannelMetrics};
 use prometheus::{IntGauge, Registry};
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 use storage::{CertificateStore, CertificateToken};
 use store::{
     reopen,
@@ -48,10 +49,10 @@ pub struct NodeStorage {
     pub consensus_store: Arc<ConsensusStore>,
     pub temp_batch_store: Store<(CertificateDigest, BatchDigest), Batch>,
 
-    pub batch_meta_store: Store<BatchDigest, BatchMeta>,
+    pub batch_meta_store: Arc<Store<BatchDigest, BatchMeta>>,
     pub batch_votes_store: Store<BatchDigest, NodeVotes>,
     pub tx_votes_store: Store<u64, NodeVotes>,
-    pub txo_tx_store: Store<u64, u64>,
+    pub txo_tx_store: Store<u64, Vec<u64>>,
 }
 
 impl NodeStorage {
@@ -120,7 +121,7 @@ impl NodeStorage {
             Self::BATCH_META_CF;<BatchDigest, BatchMeta>,
             Self::BATCH_VOTES_CF;<BatchDigest, NodeVotes>,
             Self::TX_VOTES_CF;<u64, NodeVotes>,
-            Self::TXO_TX_CF;<u64, u64>
+            Self::TXO_TX_CF;<u64, Vec<u64>>
         );
 
         let vote_digest_store = Store::new(votes_map);
@@ -130,7 +131,7 @@ impl NodeStorage {
         let batch_store = Store::new(batch_map);
         let consensus_store = Arc::new(ConsensusStore::new(last_committed_map, sequence_map));
         let temp_batch_store = Store::new(temp_batch_map);
-        let batch_meta_store = Store::new(batch_meta_store);
+        let batch_meta_store = Arc::new(Store::new(batch_meta_store));
         let batch_votes_store = Store::new(batch_votes_store);
         let tx_votes_store = Store::new(tx_votes_store);
         let txo_tx_store = Store::new(txo_tx_store);
@@ -339,9 +340,10 @@ impl Node {
             &execution_state,
         )
         .await?
+        .certificates
         .into_iter()
-        .sorted_by(|a, b| a.consensus_index.cmp(&b.consensus_index))
-        .collect::<Vec<ConsensusOutput>>();
+        .sorted_by(|a, b| a.1.cmp(&b.1))
+        .collect::<Vec<_>>();
 
         let len_restored = restored_consensus_output.len() as u64;
         if len_restored > 0 {
@@ -361,10 +363,20 @@ impl Node {
         //     parameters.gc_depth,
         // );
 
-        let ordering_engine = Tusk::new(
+        // let ordering_engine = Tusk::new(
+        //     (**committee.load()).clone(),
+        //     store.consensus_store.clone(),
+        //     parameters.gc_depth,
+        // );
+
+        let ordering_engine = Clerk::new(
             (**committee.load()).clone(),
             store.consensus_store.clone(),
             parameters.gc_depth,
+            store.batch_meta_store.clone(),
+            store.batch_votes_store.clone(),
+            store.tx_votes_store.clone(),
+            store.txo_tx_store.clone(),
         );
         let consensus_handles = Consensus::spawn(
             (**committee.load()).clone(),
@@ -390,7 +402,10 @@ impl Node {
             tx_reconfigure,
             /* rx_consensus */ rx_sequence,
             registry,
-            restored_consensus_output,
+            ConsensusOutput {
+                certificates: restored_consensus_output,
+                transactions: HashMap::new(),
+            },
         )?;
 
         Ok(executor_handles

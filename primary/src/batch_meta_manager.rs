@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 // Copyright (c) 2021, Facebook, Inc. and its affiliates
 // Copyright (c) 2022, Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
@@ -13,7 +15,7 @@ mod payload_receiver_tests;
 /// headers (i.e.. make sure we have their payload).
 pub struct BatchMetaManager {
     /// The persistent storage.
-    store: Store<BatchDigest, BatchMeta>,
+    store: Arc<Store<BatchDigest, BatchMeta>>,
 
     // Receive new meta from worker
     rx_meta_worker: Receiver<(BatchDigest, BatchMeta)>,
@@ -25,7 +27,7 @@ pub struct BatchMetaManager {
 impl BatchMetaManager {
     #[must_use]
     pub fn spawn(
-        store: Store<BatchDigest, BatchMeta>,
+        store: Arc<Store<BatchDigest, BatchMeta>>,
         rx_meta_worker: Receiver<(BatchDigest, BatchMeta)>,
         rx_meta_primary: Receiver<Vec<BatchDigest>>,
     ) -> JoinHandle<()> {

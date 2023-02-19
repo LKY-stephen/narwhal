@@ -21,6 +21,7 @@ use network::P2pNetwork;
 
 use prometheus::Registry;
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use storage::CertificateStore;
 
@@ -28,7 +29,8 @@ use crate::subscriber::spawn_subscriber;
 use tokio::sync::oneshot;
 use tokio::{sync::watch, task::JoinHandle};
 use types::{
-    metered_channel, CertificateDigest, ConsensusStore, ReconfigureNotification, SequenceNumber,
+    metered_channel, Certificate, CertificateDigest, ConsensusStore, ReconfigureNotification,
+    SequenceNumber,
 };
 
 /// Convenience type representing a serialized transaction.
@@ -44,13 +46,20 @@ pub trait ExecutionState {
     /// also return a new committee to reconfigure the system.
     async fn handle_consensus_transaction(
         &self,
-        consensus_output: &ConsensusOutput,
+        consensus_output: &Certificate,
         execution_indices: ExecutionIndices,
         transaction: Vec<u8>,
     );
 
     /// Load the last consensus index from storage.
     async fn load_execution_indices(&self) -> ExecutionIndices;
+
+    /// Execute the fast committed transactions.
+    async fn handle_fast_commitment(
+        &self,
+        execution_indices: ExecutionIndices,
+        transaction: Vec<u8>,
+    );
 }
 
 /// A client subscribing to the consensus output and executing every transaction.
@@ -68,7 +77,7 @@ impl Executor {
         tx_reconfigure: &watch::Sender<ReconfigureNotification>,
         rx_consensus: metered_channel::Receiver<ConsensusOutput>,
         registry: &Registry,
-        restored_consensus_output: Vec<ConsensusOutput>,
+        restored_consensus_output: ConsensusOutput,
     ) -> SubscriberResult<Vec<JoinHandle<()>>>
     where
         State: ExecutionState + Send + Sync + 'static,
@@ -107,7 +116,7 @@ pub async fn get_restored_consensus_output<State: ExecutionState>(
     consensus_store: Arc<ConsensusStore>,
     certificate_store: CertificateStore,
     execution_state: &State,
-) -> Result<Vec<ConsensusOutput>, SubscriberError> {
+) -> Result<ConsensusOutput, SubscriberError> {
     let mut restored_consensus_output = Vec::new();
     let consensus_next_index = consensus_store
         .read_last_consensus_index()
@@ -129,30 +138,40 @@ pub async fn get_restored_consensus_output<State: ExecutionState>(
         for (cert_digest, seq) in missing {
             if let Some(cert) = certificate_store.read(cert_digest).unwrap() {
                 // Save the missing sequence / cert pair as ConsensusOutput to re-send to the executor.
-                restored_consensus_output.push(ConsensusOutput {
-                    certificate: cert,
-                    consensus_index: seq,
-                })
+                restored_consensus_output.push((cert, seq))
             }
         }
     }
-    Ok(restored_consensus_output)
+    Ok(ConsensusOutput {
+        certificates: restored_consensus_output,
+        transactions: HashMap::new(),
+    })
 }
 
 #[async_trait]
 impl<T: ExecutionState + 'static + Send + Sync> ExecutionState for Arc<T> {
     async fn handle_consensus_transaction(
         &self,
-        consensus_output: &ConsensusOutput,
+        certificate: &Certificate,
         execution_indices: ExecutionIndices,
         transaction: Vec<u8>,
     ) {
         self.as_ref()
-            .handle_consensus_transaction(consensus_output, execution_indices, transaction)
+            .handle_consensus_transaction(certificate, execution_indices, transaction)
             .await
     }
 
     async fn load_execution_indices(&self) -> ExecutionIndices {
         self.as_ref().load_execution_indices().await
+    }
+
+    async fn handle_fast_commitment(
+        &self,
+        execution_indices: ExecutionIndices,
+        transaction: Vec<u8>,
+    ) {
+        self.as_ref()
+            .handle_fast_commitment(execution_indices, transaction)
+            .await
     }
 }

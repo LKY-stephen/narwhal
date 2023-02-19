@@ -7,12 +7,15 @@
     rust_2021_compatibility
 )]
 
-pub mod bullshark;
+// pub mod bullshark;
+pub mod clerk;
 pub mod consensus;
 pub mod dag;
 pub mod metrics;
-pub mod tusk;
+// pub mod tusk;
 mod utils;
+
+use std::collections::HashMap;
 
 pub use crate::consensus::Consensus;
 
@@ -26,7 +29,16 @@ pub const DEFAULT_CHANNEL_SIZE: usize = 1_000;
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ConsensusOutput {
     /// The sequenced certificate.
-    pub certificate: Certificate,
-    /// The (global) index associated with this certificate.
-    pub consensus_index: SequenceNumber,
+    pub certificates: Vec<(Certificate, SequenceNumber)>,
+    /// committed transactions
+    pub transactions: HashMap<u64, bool>,
+}
+
+impl ConsensusOutput {
+    pub fn default() -> ConsensusOutput {
+        ConsensusOutput {
+            certificates: vec![],
+            transactions: HashMap::new(),
+        }
+    }
 }

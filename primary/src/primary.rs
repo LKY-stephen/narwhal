@@ -84,7 +84,7 @@ impl Primary {
         certificate_store: CertificateStore,
         payload_store: Store<(BatchDigest, WorkerId), PayloadToken>,
         vote_digest_store: Store<PublicKey, RoundVoteDigestPair>,
-        meta_store: Store<BatchDigest, BatchMeta>,
+        meta_store: Arc<Store<BatchDigest, BatchMeta>>,
         tx_consensus: Sender<Certificate>,
         rx_consensus: Receiver<Certificate>,
         tx_get_block_commands: Sender<BlockCommand>,

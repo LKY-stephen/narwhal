@@ -3,7 +3,6 @@
 use arc_swap::ArcSwap;
 use bytes::Bytes;
 use config::{Committee, Parameters, SharedWorkerCache, WorkerCache, WorkerId};
-use consensus::ConsensusOutput;
 use crypto::{KeyPair, NetworkKeyPair, PublicKey};
 use executor::{ExecutionIndices, ExecutionState};
 use fastcrypto::traits::KeyPair as _;
@@ -19,7 +18,10 @@ use tokio::{
     sync::mpsc::{channel, Receiver, Sender},
     time::{interval, sleep, Duration, MissedTickBehavior},
 };
-use types::{ReconfigureNotification, TransactionProto, TransactionsClient, WorkerPrimaryMessage};
+use types::{
+    Certificate, ReconfigureNotification, TransactionProto, TransactionsClient,
+    WorkerPrimaryMessage,
+};
 
 /// A simple/dumb execution engine.
 struct SimpleExecutionState {
@@ -70,7 +72,7 @@ impl SimpleExecutionState {
 impl ExecutionState for SimpleExecutionState {
     async fn handle_consensus_transaction(
         &self,
-        _consensus_output: &ConsensusOutput,
+        _certificate: &Certificate,
         execution_indices: ExecutionIndices,
         transaction: Vec<u8>,
     ) {
@@ -108,6 +110,13 @@ impl ExecutionState for SimpleExecutionState {
 
     async fn load_execution_indices(&self) -> ExecutionIndices {
         ExecutionIndices::default()
+    }
+
+    async fn handle_fast_commitment(
+        &self,
+        _execution_indices: ExecutionIndices,
+        _transaction: Vec<u8>,
+    ) {
     }
 }
 

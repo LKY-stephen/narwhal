@@ -1,14 +1,12 @@
 // Copyright (c) 2022, Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 use crate::{ExecutionIndices, ExecutionState};
-use consensus::ConsensusOutput;
 use tokio::task::JoinHandle;
-
-use types::{metered_channel, Batch};
+use types::{metered_channel, Batch, Certificate};
 
 #[derive(Clone, Debug)]
 pub struct BatchIndex {
-    pub consensus_output: ConsensusOutput,
+    pub certificate: Certificate,
     pub next_certificate_index: u64,
     pub batch_index: u64,
 }
@@ -40,7 +38,7 @@ impl<State: ExecutionState + Send + Sync + 'static> Notifier<State> {
                 };
                 self.callback
                     .handle_consensus_transaction(
-                        &index.consensus_output,
+                        &index.certificate,
                         execution_indices,
                         transaction,
                     )

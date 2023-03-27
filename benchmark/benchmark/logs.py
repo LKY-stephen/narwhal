@@ -210,6 +210,9 @@ class LogParser:
     def _fast_commit_latency(self):
         latency = [c - self.sent_samples[d] for d, c in self.fast_committed_sample.items()]
         return mean(latency) if latency else 0
+    
+    def _fast_commit_rate(self):
+        return len(self.fast_committed_sample)*100.0/len(self.received_samples)
 
     def result(self):
         header_size = self.configs[0]['header_size']
@@ -259,6 +262,8 @@ class LogParser:
             f' End-to-end BPS: {round(end_to_end_bps):,} B/s\n'
             f' formal_commit latency: {round(formal_commit_latency):,} ms\n'
             f' fast_commit latency: {round(fast_commit_latency):,} ms\n'
+            
+            f' fast_commit rate: {self._fast_commit_rate()} % \n'
             '-----------------------------------------\n'
         )
 

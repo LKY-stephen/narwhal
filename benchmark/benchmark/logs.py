@@ -245,7 +245,7 @@ class LogParser:
             '\n'
             f' End-to-end TPS: {round(end_to_end_tps):,} tx/s\n'
             f' End-to-end BPS: {round(end_to_end_bps):,} B/s\n'
-            f' End-to-end latency: {round(end_to_end_latency):,} ms\n'
+            f' formal_commit latency: {round(end_to_end_latency):,} ms\n'
             '-----------------------------------------\n'
         )
 

@@ -5,8 +5,9 @@ use consensus::{
     bullshark::Bullshark,
     dag::Dag,
     metrics::{ChannelMetrics, ConsensusMetrics},
-    tusk::Tusk,
-    Consensus, ConsensusOutput,
+    //tusk::Tusk,
+    Consensus,
+    ConsensusOutput,
 };
 
 use crypto::{KeyPair, NetworkKeyPair, PublicKey};
@@ -195,7 +196,7 @@ impl Node {
 
             handles.push(handle);
 
-            (Some(Arc::new(dag)), NetworkModel::Asynchronous)
+            (Some(Arc::new(dag)), NetworkModel::PartiallySynchronous)
         } else {
             let consensus_handles = Self::spawn_consensus(
                 name.clone(),
@@ -323,17 +324,17 @@ impl Node {
             .inc_by(len_restored);
 
         // Spawn the consensus core who only sequences transactions.
-        // let ordering_engine = Bullshark::new(
-        //     (**committee.load()).clone(),
-        //     store.consensus_store.clone(),
-        //     parameters.gc_depth,
-        // );
-
-        let ordering_engine = Tusk::new(
+        let ordering_engine = Bullshark::new(
             (**committee.load()).clone(),
             store.consensus_store.clone(),
             parameters.gc_depth,
         );
+
+        // let ordering_engine = Tusk::new(
+        //     (**committee.load()).clone(),
+        //     store.consensus_store.clone(),
+        //     parameters.gc_depth,
+        // );
         let consensus_handles = Consensus::spawn(
             (**committee.load()).clone(),
             store.consensus_store.clone(),

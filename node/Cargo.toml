@@ -17,6 +17,7 @@ futures = "0.3.24"
 multiaddr = "0.14.0"
 mysten-network = "0.1.0"
 rand = "0.8.5"
+rand_chacha = "0.3.1"
 store = { version = "0.1.0", package = "typed-store"}
 telemetry-subscribers = "0.1.0"
 thiserror = "1.0.35"

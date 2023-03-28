@@ -14,15 +14,7 @@ from benchmark.remote import Bench, BenchError
 @task
 def local(ctx, debug=True):
     ''' Run benchmarks on localhost '''
-    bench_params = {
-        'faults': 0,
-        'nodes': 4,
-        'workers': 1,
-        'rate': 1_000,
-        'tx_size': 512,
-        'duration': 20,
-        'mem_profiling': False
-    }
+    
     node_params = {
         'header_size': 1_000,  # bytes
         'max_header_delay': '200ms',  # ms
@@ -49,8 +41,18 @@ def local(ctx, debug=True):
         }
     }
     try:
-        ret = LocalBench(bench_params, node_params).run(debug)
-        print(ret.result())
+        for tps in [1000,2000,4000,8000,16_000,32_000, 64_000]:
+            bench_params = {
+                    'faults': 0,
+                    'nodes': 4,
+                    'workers': 1,
+                    'rate': tps,
+                    'tx_size': 512,
+                    'duration': 100,
+                    'mem_profiling': False
+                }
+            ret = LocalBench(bench_params, node_params).run(debug)
+            print(ret.result())
     except BenchError as e:
         Print.error(e)
 

@@ -338,51 +338,54 @@ where
                     };
                     let r =  certificate.header.round;
 
-                    // Process the certificate using the selected consensus protocol.
                     if r % 2 != 0 || r < 4 {
-
-                        let consensusu_outputs =
-                        self.protocol
-                            .process_certificate(&mut state, self.consensus_index, certificate.clone())?;
-
-                        // Update the consensus index.
-                        self.consensus_index += consensusu_outputs.len() as u64;
-
-                        // Output the sequence in the right order.
-                        for output in consensusu_outputs.clone() {
-                            let index = output.index;
-
-                            let res = self.board.output_results(output.blocks.clone());
-
-                            #[cfg(not(feature = "benchmark"))]
-                            if index% 500 == 0 {
-                                tracing::debug!("Committed leader {}", &output.leader.digest());
-                            }
-
-                            for sub_block in output.blocks.clone(){
-
-                                self.tx_primary.send(sub_block).await.expect("Failed to send certificate to primary");
-                            }
-
-                            // Update DAG size metric periodically to limit computation cost.
-                            // TODO: this should be triggered on collection when library support for
-                            // closure metrics is available.
-                            if index % 100 == 0 {
-                                self.metrics
-                                    .dag_size_bytes
-                                    .set((mysten_util_mem::malloc_size(&state.dag) + std::mem::size_of::<Dag>()) as i64);
-                            }
-
-                            if let Err(e) = self.tx_result.send(res.await).await {
-                                tracing::warn!("Failed to output tx results: {e}");
-                            }
-
-                            if let Err(e) = self.tx_output.send(output).await {
-                                tracing::warn!("Failed to output consensus output: {e}");
-                            }
-
-                        }
+                        continue;
                     }
+                    // Process the certificate using the selected consensus protocol.
+
+
+                    let consensusu_outputs =
+                    self.protocol
+                        .process_certificate(&mut state, self.consensus_index, certificate.clone())?;
+
+                    // Update the consensus index.
+                    self.consensus_index += consensusu_outputs.len() as u64;
+
+                    // Output the sequence in the right order.
+                    for output in consensusu_outputs.clone() {
+                        let index = output.index;
+
+                        let res = self.board.output_results(output.blocks.clone());
+
+                        #[cfg(not(feature = "benchmark"))]
+                        if index% 500 == 0 {
+                            tracing::debug!("Committed leader {}", &output.leader.digest());
+                        }
+
+                        for sub_block in output.blocks.clone(){
+
+                            self.tx_primary.send(sub_block).await.expect("Failed to send certificate to primary");
+                        }
+
+                        // Update DAG size metric periodically to limit computation cost.
+                        // TODO: this should be triggered on collection when library support for
+                        // closure metrics is available.
+                        if index % 100 == 0 {
+                            self.metrics
+                                .dag_size_bytes
+                                .set((mysten_util_mem::malloc_size(&state.dag) + std::mem::size_of::<Dag>()) as i64);
+                        }
+
+                        if let Err(e) = self.tx_result.send(res.await).await {
+                            tracing::warn!("Failed to output tx results: {e}");
+                        }
+
+                        if let Err(e) = self.tx_output.send(output).await {
+                            tracing::warn!("Failed to output consensus output: {e}");
+                        }
+
+                    }
+
 
                     self.metrics
                         .consensus_dag_rounds

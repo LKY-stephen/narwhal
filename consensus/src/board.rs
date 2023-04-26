@@ -403,13 +403,6 @@ impl Board {
             .collect::<HashSet<_>>();
 
         let mut nb_of_txs = results.len();
-        let txo_to_commit = batches_to_commit
-            .clone()
-            .into_iter()
-            .filter_map(|digest| self.batch_txo_store.get(&digest))
-            .flatten()
-            .map(|x| x.to_owned())
-            .collect();
 
         let txs_to_commit: HashSet<TransactionId> = batches_to_commit
             .clone()
@@ -434,6 +427,13 @@ impl Board {
         } else {
             // we have conflicted txs, need to process them
 
+            let txo_to_commit = batches_to_commit
+                .clone()
+                .into_iter()
+                .filter_map(|digest| self.batch_txo_store.get(&digest))
+                .flatten()
+                .map(|x| x.to_owned())
+                .collect();
             // step2, we compute the conflicted tx-txo pair
             // we compute by intersection of conflicted txo and consumed txo
             // then we reverse the map to make the tx as key
